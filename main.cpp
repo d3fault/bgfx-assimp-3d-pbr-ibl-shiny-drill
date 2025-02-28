@@ -406,7 +406,8 @@ int main(int argc, char** argv)
         }
 
         // Submit draw call
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_CULL_CCW);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CCW);
+
         bgfx::submit(0, program);
 
         // Advance frame
