@@ -286,7 +286,7 @@ void printMaterialTextures(const aiScene* scene)
                     aiString path;
                     if (material->GetTexture((aiTextureType)type, i, &path) == AI_SUCCESS)
                     {
-                        std::cout << "  - " << path.C_Str() << "\n";
+                        std::cout << "  - " << path.C_Str() << " (Type: " << aiTextureTypeToString((aiTextureType)type) << ")\n";
                     }
                 }
             }
@@ -405,20 +405,10 @@ int main(int argc, char** argv)
 
     bgfx::TextureHandle diffuseTex   = loadTextureType(mat, aiTextureType_DIFFUSE, scene);
     bgfx::TextureHandle normalTex    = loadTextureType(mat, aiTextureType_NORMALS, scene);
-    bgfx::TextureHandle metallicTex  = loadTextureType(mat, aiTextureType_METALNESS, scene);
-    if (!bgfx::isValid(metallicTex)) {
-        metallicTex = loadTextureType(mat, aiTextureType_UNKNOWN, scene);
-        if (bgfx::isValid(metallicTex)) {
-            std::cout << "Using aiTextureType_UNKNOWN for metallicTex.\n";
-        }
-    }
-
-    bgfx::TextureHandle roughnessTex = loadTextureType(mat, aiTextureType_DIFFUSE_ROUGHNESS, scene);
-    if (!bgfx::isValid(roughnessTex)) {
-        roughnessTex = loadTextureType(mat, aiTextureType_UNKNOWN, scene);
-        if (bgfx::isValid(roughnessTex)) {
-            std::cout << "Using aiTextureType_UNKNOWN for roughnessTex.\n";
-        }
+    bgfx::TextureHandle armTex = loadTextureType(mat, aiTextureType_UNKNOWN, scene);
+    if (!bgfx::isValid(armTex))
+    {
+        std::cout << "Warning: No valid ARM (AO, Roughness, Metalness) texture found.\n";
     }
 
 
@@ -428,19 +418,12 @@ int main(int argc, char** argv)
     if (!bgfx::isValid(normalTex)) {
         std::cerr << "Warning: No valid embedded normalTex texture found. The duck will be untextured normalTex." << std::endl;
     }
-    if (!bgfx::isValid(metallicTex)) {
-        std::cerr << "Warning: No valid embedded metallicTex texture found. The duck will be untextured metallicTex." << std::endl;
-    }
-    if (!bgfx::isValid(roughnessTex)) {
-        std::cerr << "Warning: No valid embedded texture roughnessTex found. The duck will be untextured roughnessTex." << std::endl;
-    }
 
 
     // Create a sampler uniform so we can bind the texture in the fragment shader
     bgfx::UniformHandle s_texColor   = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
     bgfx::UniformHandle s_texNormal  = bgfx::createUniform("s_texNormal", bgfx::UniformType::Sampler);
-    bgfx::UniformHandle s_texMetal   = bgfx::createUniform("s_texMetal", bgfx::UniformType::Sampler);
-    bgfx::UniformHandle s_texRough   = bgfx::createUniform("s_texRough", bgfx::UniformType::Sampler);
+    bgfx::UniformHandle s_texARM     = bgfx::createUniform("s_texARM", bgfx::UniformType::Sampler); // Replaces s_texMetal & s_texRough
 
     // Load the duck shaders
     bgfx::ProgramHandle program = loadProgram("vs_duck.bin", "fs_duck.bin");
@@ -519,8 +502,9 @@ int main(int argc, char** argv)
         // In your render loop, after setting up the transform, vertex, index buffers:
         if (bgfx::isValid(diffuseTex))  bgfx::setTexture(0, s_texColor, diffuseTex);
         if (bgfx::isValid(normalTex))   bgfx::setTexture(1, s_texNormal, normalTex);
-        if (bgfx::isValid(metallicTex)) bgfx::setTexture(2, s_texMetal, metallicTex);
-        if (bgfx::isValid(roughnessTex)) bgfx::setTexture(3, s_texRough, roughnessTex);
+        if (bgfx::isValid(armTex))
+            bgfx::setTexture(2, s_texARM, armTex);
+
 
         bgfx::setState(
                     BGFX_STATE_WRITE_RGB |
@@ -541,10 +525,8 @@ int main(int argc, char** argv)
     bgfx::destroy(vbh);
     bgfx::destroy(ibh);
 
-    if (bgfx::isValid(roughnessTex))
-        bgfx::destroy(roughnessTex);
-    if (bgfx::isValid(metallicTex))
-        bgfx::destroy(metallicTex);
+    if (bgfx::isValid(armTex))
+        bgfx::destroy(armTex);
     if (bgfx::isValid(normalTex))
         bgfx::destroy(normalTex);
     if (bgfx::isValid(diffuseTex))
@@ -552,8 +534,7 @@ int main(int argc, char** argv)
 
     bgfx::destroy(s_texColor);
     bgfx::destroy(s_texNormal);
-    bgfx::destroy(s_texMetal);
-    bgfx::destroy(s_texRough);
+    bgfx::destroy(s_texARM);
 
     bgfx::shutdown();
     glfwDestroyWindow(window);
