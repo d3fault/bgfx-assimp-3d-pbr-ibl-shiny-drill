@@ -199,7 +199,7 @@ bgfx::TextureHandle loadTextureType(const aiMaterial* mat, aiTextureType type, c
                     if (data)
                     {
                         // Only swap Red and Blue if this is a Diffuse/BaseColor texture.
-                        if (type == aiTextureType_DIFFUSE || type == aiTextureType_BASE_COLOR)
+                        //if (type == aiTextureType_DIFFUSE || type == aiTextureType_BASE_COLOR)
                         {
                             for (int i = 0; i < x * y * 4; i += 4)
                             {
@@ -479,21 +479,6 @@ int main(int argc, char** argv)
         float mtxModel[16];
         bx::mtxMul(mtxModel, mtxRotateY, mtxTranslate); // Only apply Y rotation
 
-
-#if 0 //DEBUG
-        static float triVertices[] = {
-            0.0f,  0.5f, 0.0f, // Top
-            -0.5f, -0.5f, 0.0f, // Bottom Left
-            0.5f, -0.5f, 0.0f  // Bottom Right
-        };
-        bgfx::TransientVertexBuffer tvb;
-        bgfx::allocTransientVertexBuffer(&tvb, 3, g_vertexLayout);
-        memcpy(tvb.data, triVertices, sizeof(triVertices));
-
-        bgfx::setVertexBuffer(0, &tvb);
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LESS);
-        bgfx::submit(0, program);
-#else
         // Submit the geometry
         bgfx::setTransform(mtxModel);
         bgfx::setVertexBuffer(0, vbh);
@@ -513,7 +498,6 @@ int main(int argc, char** argv)
                     BGFX_STATE_CULL_CCW
                     );
         bgfx::submit(0, program);
-#endif
 
         // Advance frame
         bgfx::frame();
