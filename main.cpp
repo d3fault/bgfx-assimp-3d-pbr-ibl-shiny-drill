@@ -284,8 +284,8 @@ int main(int argc, char** argv)
         "/dev/shm/duckGLTF/duckGltfExport.glb",
         aiProcess_Triangulate |
         aiProcess_GenNormals |
-        aiProcess_CalcTangentSpace //|
-        //aiProcess_FlipUVs //|              // <-- Flips V texture coordinates
+        aiProcess_CalcTangentSpace |
+        aiProcess_FlipUVs //|              // <-- Flips V texture coordinates
         //aiProcess_ConvertToLeftHanded     // <-- Converts to left-handed coordinate system
     );
 
@@ -361,8 +361,8 @@ int main(int argc, char** argv)
         // Set up a simple camera
         float view[16];
         {
-            const bx::Vec3 at   = {0.0f, 0.0f, 0.0f};
-            const bx::Vec3 eye  = {100.0f, 5.0f, 100.0f}; // Move slightly back so we can see the duck
+            const bx::Vec3 at   = {0.0f, 50.0f, 0.0f};
+            const bx::Vec3 eye  = {100.0f, 150.0f, 100.0f}; // Move slightly back so we can see the duck
             const bx::Vec3 up   = {0.0f, 1.0f, 0.0f};
             bx::mtxLookAt(view, eye, at, up);
         }
@@ -374,16 +374,21 @@ int main(int argc, char** argv)
 
         bgfx::setViewTransform(0, view, proj);
 
-        // Build a model matrix that rotates the duck around Y
-        float mtxRotate[16];
-        bx::mtxRotateY(mtxRotate, time);
+        float mtxRotateY[16];
+        bx::mtxRotateY(mtxRotateY, time);
 
-        // Optionally translate it a bit so it's visible
+        float mtxRotateX[16];
+        bx::mtxRotateX(mtxRotateX, bx::toRad(-90.0f)); // Rotate -90 degrees around X
+
+        float mtxTransform[16];
+        bx::mtxMul(mtxTransform, mtxRotateX, mtxRotateY); // Apply X rotation first, then Y
+
         float mtxTranslate[16];
         bx::mtxTranslate(mtxTranslate, 0.0f, 0.0f, 0.0f);
 
         float mtxModel[16];
-        bx::mtxMul(mtxModel, mtxRotate, mtxTranslate);
+        bx::mtxMul(mtxModel, mtxTransform, mtxTranslate);
+
 
         // Submit the geometry
         bgfx::setTransform(mtxModel);
