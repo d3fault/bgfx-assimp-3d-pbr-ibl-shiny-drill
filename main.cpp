@@ -180,8 +180,15 @@ bgfx::TextureHandle loadEmbeddedTexture(const aiScene* scene)
                             aiTex->mWidth, // size in bytes
                             &x, &y, &n, 4
                         );
+
                         if (data)
                         {
+                            // Convert RGBA -> BGRA (swap R and B)
+                            for (int i = 0; i < x * y * 4; i += 4)
+                            {
+                                std::swap(data[i], data[i + 2]); // Swap Red and Blue
+                            }
+
                             // Create a bgfx texture
                             const bgfx::Memory* mem = bgfx::copy(data, x*y*4);
                             stbi_image_free(data);
@@ -274,9 +281,14 @@ int main(int argc, char** argv)
 
     Assimp::Importer importer;
     const aiScene* scene = importer.ReadFile(
-        "/run/shm/duckGLTF/duckGltfExport.glb",
-        aiProcess_Triangulate | aiProcess_GenNormals | aiProcess_CalcTangentSpace
+        "/dev/shm/duckGLTF/duckGltfExport.glb",
+        aiProcess_Triangulate |
+        aiProcess_GenNormals |
+        aiProcess_CalcTangentSpace //|
+        //aiProcess_FlipUVs //|              // <-- Flips V texture coordinates
+        //aiProcess_ConvertToLeftHanded     // <-- Converts to left-handed coordinate system
     );
+
     if (!scene)
     {
         std::cerr << "Failed to load scene via Assimp: " << importer.GetErrorString() << std::endl;
