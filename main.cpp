@@ -22,18 +22,15 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-// -----------------------------------------------------------------------------
-// For convenience, we’ll define a structure for our vertex data.
-// We’ll match the layout used in varying.def.sc: position, normal, texcoord0
-// We won't explicitly store colors in the model data, but we'll fill them in
-// as dummy if needed.
-// -----------------------------------------------------------------------------
-struct PosNormalTexcoordVertex
+struct MyFancyVertex
 {
-    float px, py, pz;
-    float nx, ny, nz;
-    float u, v;
+    float px, py, pz;  // Position
+    float nx, ny, nz;  // Normal
+    float tx, ty, tz;  // Tangent
+    float bx, by, bz;  // Bitangent
+    float u, v;        // Texture coordinates
 };
+
 
 static bgfx::VertexLayout g_vertexLayout;
 
@@ -42,10 +39,12 @@ static void initVertexLayout()
     // This layout must match the usage in varying.def.sc (POSITION, NORMAL0, TEXCOORD0).
     // We skip COLOR0, COLOR1 in the actual geometry data for brevity (we can fill them if needed).
     g_vertexLayout.begin()
-        .add(bgfx::Attrib::Position,  3, bgfx::AttribType::Float)
-        .add(bgfx::Attrib::Normal,    3, bgfx::AttribType::Float)
-        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
-    .end();
+            .add(bgfx::Attrib::Position,  3, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::Normal,    3, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::Tangent,   3, bgfx::AttribType::Float) // <--
+            .add(bgfx::Attrib::Bitangent, 3, bgfx::AttribType::Float) // <--
+            .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+            .end();
 }
 
 // -----------------------------------------------------------------------------
@@ -91,24 +90,30 @@ bgfx::ProgramHandle loadProgram(const char* _vsName, const char* _fsName)
 // Convert Assimp mesh data -> our geometry buffers
 // -----------------------------------------------------------------------------
 void assimpMeshToBuffers(const aiMesh* mesh,
-                         std::vector<PosNormalTexcoordVertex> &outVertices,
-                         std::vector<uint32_t>                &outIndices)
+                         std::vector<MyFancyVertex>& outVertices,
+                         std::vector<uint32_t>& outIndices)
 {
+    if (!mesh) return;
+
+    outVertices.clear();
+    outIndices.clear();
     outVertices.reserve(mesh->mNumVertices);
-    // If we have no normals or UVs, fill them with something safe
-    bool hasNormals  = (mesh->mNormals != nullptr);
-    bool hasTexcoords= (mesh->mTextureCoords[0] != nullptr);
+    outIndices.reserve(mesh->mNumFaces * 3);
+
+    bool hasNormals   = mesh->HasNormals();
+    bool hasTexcoords = (mesh->mTextureCoords[0] != nullptr);
+    bool hasTangents  = (mesh->HasTangentsAndBitangents());
 
     for (unsigned int i = 0; i < mesh->mNumVertices; i++)
     {
-        PosNormalTexcoordVertex v;
+        MyFancyVertex v;
 
         // Position
         v.px = mesh->mVertices[i].x;
         v.py = mesh->mVertices[i].y;
         v.pz = mesh->mVertices[i].z;
 
-        // Normal
+        // Normal (default to up if missing)
         if (hasNormals)
         {
             v.nx = mesh->mNormals[i].x;
@@ -117,12 +122,28 @@ void assimpMeshToBuffers(const aiMesh* mesh,
         }
         else
         {
-            v.nx = 0.0f;
-            v.ny = 1.0f;
-            v.nz = 0.0f;
+            v.nx = 0.0f; v.ny = 1.0f; v.nz = 0.0f;
         }
 
-        // Texcoord
+        // Tangent & Bitangent (for normal mapping)
+        if (hasTangents)
+        {
+            v.tx = mesh->mTangents[i].x;
+            v.ty = mesh->mTangents[i].y;
+            v.tz = mesh->mTangents[i].z;
+
+            v.bx = mesh->mBitangents[i].x;
+            v.by = mesh->mBitangents[i].y;
+            v.bz = mesh->mBitangents[i].z;
+        }
+        else
+        {
+            // Generate dummy tangent space (not ideal but prevents crashes)
+            v.tx = 1.0f; v.ty = 0.0f; v.tz = 0.0f;
+            v.bx = 0.0f; v.by = 1.0f; v.bz = 0.0f;
+        }
+
+        // Texture Coordinates (UVs)
         if (hasTexcoords)
         {
             v.u = mesh->mTextureCoords[0][i].x;
@@ -130,93 +151,147 @@ void assimpMeshToBuffers(const aiMesh* mesh,
         }
         else
         {
-            v.u = 0.0f;
-            v.v = 0.0f;
+            v.u = 0.0f; v.v = 0.0f;
         }
 
         outVertices.push_back(v);
     }
 
-    // Indices
+    // Load indices
     for (unsigned int f = 0; f < mesh->mNumFaces; f++)
     {
         const aiFace& face = mesh->mFaces[f];
-        // We assume triangle faces
-        if (face.mNumIndices == 3)
+        if (face.mNumIndices == 3)  // Ensure it's a triangle
         {
             outIndices.push_back(face.mIndices[0]);
             outIndices.push_back(face.mIndices[1]);
             outIndices.push_back(face.mIndices[2]);
         }
     }
+
+    std::cout << "num vertices:" << outVertices.size() << std::endl;
+    std::cout << "num indices:" << outIndices.size() << std::endl;
 }
 
-// -----------------------------------------------------------------------------
-// Attempt to find & load the first embedded diffuse texture we find
-// Returns a valid bgfx::TextureHandle or BGFX_INVALID_HANDLE if none is found
-// -----------------------------------------------------------------------------
-bgfx::TextureHandle loadEmbeddedTexture(const aiScene* scene)
-{
-    // We'll loop over materials and check for a diffuse texture.
-    // If it's embedded, we'll decode with stb_image from memory.
-    for (unsigned int m = 0; m < scene->mNumMaterials; m++)
-    {
-        aiString path;
-        if (scene->mMaterials[m]->GetTexture(aiTextureType_DIFFUSE, 0, &path) == AI_SUCCESS)
-        {
-            // path may be "*0", "*1", etc. for embedded textures
-            if (path.length > 0 && path.data[0] == '*')
-            {
-                int texIndex = atoi(path.C_Str() + 1); // skip '*'
-                if (texIndex >= 0 && texIndex < (int)scene->mNumTextures)
-                {
-                    const aiTexture* aiTex = scene->mTextures[texIndex];
-                    if (aiTex && aiTex->mHeight == 0)
-                    {
-                        // This means it's an *embedded compressed* texture in memory (e.g. PNG/JPG bytes).
-                        int x, y, n;
-                        unsigned char* data = stbi_load_from_memory(
-                            reinterpret_cast<const stbi_uc*>(aiTex->pcData),
-                            aiTex->mWidth, // size in bytes
-                            &x, &y, &n, 4
-                        );
 
-                        if (data)
+bgfx::TextureHandle loadTextureType(const aiMaterial* mat, aiTextureType type, const aiScene* scene)
+{
+    aiString path;
+    if (mat->GetTexture(type, 0, &path) == AI_SUCCESS)
+    {
+        // This is similar to your existing code. We'll do the same logic:
+        if (path.length > 0 && path.data[0] == '*')
+        {
+            // Embedded texture
+            int texIndex = atoi(path.C_Str() + 1);
+            if (texIndex >= 0 && texIndex < (int)scene->mNumTextures)
+            {
+                const aiTexture* aiTex = scene->mTextures[texIndex];
+                if (aiTex && aiTex->mHeight == 0)
+                {
+                    // Compressed texture in memory (e.g. PNG, JPG data)
+                    int x, y, n;
+                    unsigned char* data = stbi_load_from_memory(
+                                reinterpret_cast<const stbi_uc*>(aiTex->pcData),
+                                aiTex->mWidth,
+                                &x, &y, &n, 4
+                                );
+                    if (data)
+                    {
+                        // Only swap Red and Blue if this is a Diffuse/BaseColor texture.
+                        if (type == aiTextureType_DIFFUSE || type == aiTextureType_BASE_COLOR)
                         {
-                            // Convert RGBA -> BGRA (swap R and B)
                             for (int i = 0; i < x * y * 4; i += 4)
                             {
-                                std::swap(data[i], data[i + 2]); // Swap Red and Blue
+                                std::swap(data[i], data[i + 2]); // Swap Red and Blue channels
                             }
-
-                            // Create a bgfx texture
-                            const bgfx::Memory* mem = bgfx::copy(data, x*y*4);
-                            stbi_image_free(data);
-
-                            bgfx::TextureHandle th = bgfx::createTexture2D(
-                                uint16_t(x),
-                                uint16_t(y),
-                                false,
-                                1,
-                                bgfx::TextureFormat::BGRA8,
-                                0,
-                                mem
-                            );
-                            return th;
                         }
+
+                        const bgfx::Memory* mem = bgfx::copy(data, x * y * 4);
+                        stbi_image_free(data);
+
+                        return bgfx::createTexture2D(
+                                    uint16_t(x),
+                                    uint16_t(y),
+                                    false, 1,
+                                    bgfx::TextureFormat::BGRA8, 0,
+                                    mem
+                                    );
                     }
-                    else if (aiTex && aiTex->mHeight > 0)
+                }
+            }
+        }
+        else
+        {
+            // External file reference (not embedded).
+            // You'd have to load from disk. For glTF, often the textures might be separate files.
+            // ...
+        }
+    }
+
+    return BGFX_INVALID_HANDLE;
+}
+
+// Converts Assimp texture types to human-readable strings
+const char* aiTextureTypeToString(aiTextureType type)
+{
+    switch (type)
+    {
+    case aiTextureType_DIFFUSE: return "Diffuse (Albedo/BaseColor)";
+    case aiTextureType_SPECULAR: return "Specular";
+    case aiTextureType_AMBIENT: return "Ambient";
+    case aiTextureType_EMISSIVE: return "Emissive";
+    case aiTextureType_HEIGHT: return "Height Map (Bump)";
+    case aiTextureType_NORMALS: return "Normal Map";
+    case aiTextureType_SHININESS: return "Shininess (Roughness/Gloss)";
+    case aiTextureType_OPACITY: return "Opacity";
+    case aiTextureType_DISPLACEMENT: return "Displacement";
+    case aiTextureType_LIGHTMAP: return "Lightmap";
+    case aiTextureType_REFLECTION: return "Reflection";
+    case aiTextureType_BASE_COLOR: return "Base Color (PBR)";
+    case aiTextureType_NORMAL_CAMERA: return "Normal Map (PBR)";
+    case aiTextureType_EMISSION_COLOR: return "Emission (PBR)";
+    case aiTextureType_METALNESS: return "Metallic (PBR)";
+    case aiTextureType_DIFFUSE_ROUGHNESS: return "Roughness (PBR)";
+    case aiTextureType_AMBIENT_OCCLUSION: return "AO (PBR)";
+    case aiTextureType_UNKNOWN: return "Unknown Type";
+    default: return "Other";
+    }
+}
+
+void printMaterialTextures(const aiScene* scene)
+{
+    if (!scene || scene->mNumMaterials == 0)
+    {
+        std::cout << "No materials found in the scene.\n";
+        return;
+    }
+
+    std::cout << "Textures in this .glb file:\n";
+
+    for (unsigned int m = 0; m < scene->mNumMaterials; ++m)
+    {
+        const aiMaterial* material = scene->mMaterials[m];
+
+        for (int type = aiTextureType_NONE; type <= aiTextureType_UNKNOWN; ++type)
+        {
+            int textureCount = material->GetTextureCount((aiTextureType)type);
+            if (textureCount > 0)
+            {
+                std::cout << "Material " << m << " has " << textureCount << " texture(s) of type: "
+                          << aiTextureTypeToString((aiTextureType)type) << "\n";
+
+                for (int i = 0; i < textureCount; i++)
+                {
+                    aiString path;
+                    if (material->GetTexture((aiTextureType)type, i, &path) == AI_SUCCESS)
                     {
-                        // This means it's *embedded raw pixels*, which is less common for glTF.
-                        // If this happens, you'd need to interpret aiTex->mWidth, mHeight, etc. directly.
-                        // Not typical for GLB, so we’ll skip it here.
+                        std::cout << "  - " << path.C_Str() << "\n";
                     }
                 }
             }
         }
     }
-    // If we get here, we didn't find anything
-    return BGFX_INVALID_HANDLE;
 }
 
 // -----------------------------------------------------------------------------
@@ -272,7 +347,7 @@ int main(int argc, char** argv)
                        0x6495EDff, // ABGR
                        1.0f,       // depth
                        0           // stencil
-    );
+                       );
 
     // -------------------------------------------------------------------------
     // Prepare geometry and load the duck
@@ -281,19 +356,22 @@ int main(int argc, char** argv)
 
     Assimp::Importer importer;
     const aiScene* scene = importer.ReadFile(
-        "/dev/shm/drill/glb/Drill_01_1k.glb",
-        aiProcess_Triangulate |
-        aiProcess_GenNormals |
-        aiProcess_CalcTangentSpace |
-        //aiProcess_FlipUVs //|              // <-- Flips V texture coordinates
-        aiProcess_ConvertToLeftHanded     // <-- Converts to left-handed coordinate system
-    );
+                "/dev/shm/drill/glb/Drill_01_1k.glb",
+                aiProcess_Triangulate |
+                aiProcess_GenNormals |
+                aiProcess_CalcTangentSpace |
+                //aiProcess_FlipUVs //|              // <-- Flips V texture coordinates
+                aiProcess_ConvertToLeftHanded     // <-- Converts to left-handed coordinate system
+                );
 
     if (!scene)
     {
         std::cerr << "Failed to load scene via Assimp: " << importer.GetErrorString() << std::endl;
         return -1;
     }
+
+    //debug:
+    printMaterialTextures(scene);
 
     // For simplicity, assume the scene has at least one mesh
     if (scene->mNumMeshes < 1)
@@ -306,28 +384,63 @@ int main(int argc, char** argv)
     const aiMesh* mesh = scene->mMeshes[0];
 
     // Convert to our arrays
-    std::vector<PosNormalTexcoordVertex> vertices;
+    std::vector<MyFancyVertex> vertices;
     std::vector<uint32_t> indices;
     assimpMeshToBuffers(mesh, vertices, indices);
 
     // Create static vertex/index buffers
     bgfx::VertexBufferHandle vbh = bgfx::createVertexBuffer(
-        bgfx::makeRef(vertices.data(), sizeof(PosNormalTexcoordVertex)*vertices.size()),
-        g_vertexLayout
-    );
-    bgfx::IndexBufferHandle ibh = bgfx::createIndexBuffer(
-        bgfx::makeRef(indices.data(), sizeof(uint32_t)*indices.size()), BGFX_BUFFER_INDEX32
-    );
+                bgfx::makeRef(vertices.data(), sizeof(MyFancyVertex) * vertices.size()),
+                g_vertexLayout
+                );
 
-    // Try to load texture from embedded data
-    bgfx::TextureHandle textureHandle = loadEmbeddedTexture(scene);
-    if (!bgfx::isValid(textureHandle))
-    {
-        std::cerr << "Warning: No valid embedded texture found. The duck will be untextured." << std::endl;
+    bgfx::IndexBufferHandle ibh = bgfx::createIndexBuffer(
+                bgfx::makeRef(indices.data(), sizeof(uint32_t) * indices.size()),
+                BGFX_BUFFER_INDEX32 // IMPORTANT: 32-bit indices
+                );
+
+
+    // Suppose we have one material
+    const aiMaterial* mat = scene->mMaterials[0];
+
+    bgfx::TextureHandle diffuseTex   = loadTextureType(mat, aiTextureType_DIFFUSE, scene);
+    bgfx::TextureHandle normalTex    = loadTextureType(mat, aiTextureType_NORMALS, scene);
+    bgfx::TextureHandle metallicTex  = loadTextureType(mat, aiTextureType_METALNESS, scene);
+    if (!bgfx::isValid(metallicTex)) {
+        metallicTex = loadTextureType(mat, aiTextureType_UNKNOWN, scene);
+        if (bgfx::isValid(metallicTex)) {
+            std::cout << "Using aiTextureType_UNKNOWN for metallicTex.\n";
+        }
     }
 
+    bgfx::TextureHandle roughnessTex = loadTextureType(mat, aiTextureType_DIFFUSE_ROUGHNESS, scene);
+    if (!bgfx::isValid(roughnessTex)) {
+        roughnessTex = loadTextureType(mat, aiTextureType_UNKNOWN, scene);
+        if (bgfx::isValid(roughnessTex)) {
+            std::cout << "Using aiTextureType_UNKNOWN for roughnessTex.\n";
+        }
+    }
+
+
+    if (!bgfx::isValid(diffuseTex)) {
+        std::cerr << "Warning: No valid embedded texture found. The duck will be untextured." << std::endl;
+    }
+    if (!bgfx::isValid(normalTex)) {
+        std::cerr << "Warning: No valid embedded normalTex texture found. The duck will be untextured normalTex." << std::endl;
+    }
+    if (!bgfx::isValid(metallicTex)) {
+        std::cerr << "Warning: No valid embedded metallicTex texture found. The duck will be untextured metallicTex." << std::endl;
+    }
+    if (!bgfx::isValid(roughnessTex)) {
+        std::cerr << "Warning: No valid embedded texture roughnessTex found. The duck will be untextured roughnessTex." << std::endl;
+    }
+
+
     // Create a sampler uniform so we can bind the texture in the fragment shader
-    bgfx::UniformHandle s_texColor = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
+    bgfx::UniformHandle s_texColor   = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
+    bgfx::UniformHandle s_texNormal  = bgfx::createUniform("s_texNormal", bgfx::UniformType::Sampler);
+    bgfx::UniformHandle s_texMetal   = bgfx::createUniform("s_texMetal", bgfx::UniformType::Sampler);
+    bgfx::UniformHandle s_texRough   = bgfx::createUniform("s_texRough", bgfx::UniformType::Sampler);
 
     // Load the duck shaders
     bgfx::ProgramHandle program = loadProgram("vs_duck.bin", "fs_duck.bin");
@@ -383,25 +496,40 @@ int main(int argc, char** argv)
         float mtxModel[16];
         bx::mtxMul(mtxModel, mtxRotateY, mtxTranslate); // Only apply Y rotation
 
+
+#if 0 //DEBUG
+        static float triVertices[] = {
+            0.0f,  0.5f, 0.0f, // Top
+            -0.5f, -0.5f, 0.0f, // Bottom Left
+            0.5f, -0.5f, 0.0f  // Bottom Right
+        };
+        bgfx::TransientVertexBuffer tvb;
+        bgfx::allocTransientVertexBuffer(&tvb, 3, g_vertexLayout);
+        memcpy(tvb.data, triVertices, sizeof(triVertices));
+
+        bgfx::setVertexBuffer(0, &tvb);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LESS);
+        bgfx::submit(0, program);
+#else
         // Submit the geometry
         bgfx::setTransform(mtxModel);
         bgfx::setVertexBuffer(0, vbh);
         bgfx::setIndexBuffer(ibh);
 
-        if (bgfx::isValid(textureHandle))
-        {
-            // Bind texture to stage 0
-            bgfx::setTexture(0, s_texColor, textureHandle);
-        }
-        else
-        {
-            std::cerr << "INVALID TEXTURE HANDLE" << std::endl;
-        }
+        // In your render loop, after setting up the transform, vertex, index buffers:
+        if (bgfx::isValid(diffuseTex))  bgfx::setTexture(0, s_texColor, diffuseTex);
+        if (bgfx::isValid(normalTex))   bgfx::setTexture(1, s_texNormal, normalTex);
+        if (bgfx::isValid(metallicTex)) bgfx::setTexture(2, s_texMetal, metallicTex);
+        if (bgfx::isValid(roughnessTex)) bgfx::setTexture(3, s_texRough, roughnessTex);
 
-        // Submit draw call
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CCW);
-
+        bgfx::setState(
+                    BGFX_STATE_WRITE_RGB |
+                    BGFX_STATE_WRITE_Z   |
+                    BGFX_STATE_DEPTH_TEST_LESS |
+                    BGFX_STATE_CULL_CCW
+                    );
         bgfx::submit(0, program);
+#endif
 
         // Advance frame
         bgfx::frame();
@@ -412,9 +540,20 @@ int main(int argc, char** argv)
     bgfx::destroy(program);
     bgfx::destroy(vbh);
     bgfx::destroy(ibh);
-    if (bgfx::isValid(textureHandle))
-        bgfx::destroy(textureHandle);
+
+    if (bgfx::isValid(roughnessTex))
+        bgfx::destroy(roughnessTex);
+    if (bgfx::isValid(metallicTex))
+        bgfx::destroy(metallicTex);
+    if (bgfx::isValid(normalTex))
+        bgfx::destroy(normalTex);
+    if (bgfx::isValid(diffuseTex))
+        bgfx::destroy(diffuseTex);
+
     bgfx::destroy(s_texColor);
+    bgfx::destroy(s_texNormal);
+    bgfx::destroy(s_texMetal);
+    bgfx::destroy(s_texRough);
 
     bgfx::shutdown();
     glfwDestroyWindow(window);

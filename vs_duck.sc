@@ -1,13 +1,5 @@
-/*
-    Simple vertex shader in bgfx shader format.
-    We read position and texcoord from the vertex, transform by u_modelViewProj,
-    and pass the texcoord along to the fragment stage.
-
-    Matches the user-provided snippet plus normal usage in "varying.def.sc".
-*/
-
-$input a_position, a_normal, a_texcoord0
-$output v_texcoord0, v_normal
+$input a_position, a_normal, a_tangent, a_bitangent, a_texcoord0
+$output v_texcoord0, v_tbn
 
 #include <bgfx_shader.sh>
 
@@ -15,15 +7,18 @@ $output v_texcoord0, v_normal
 
 void main()
 {
-    // Transform position
+    // Standard transform
     gl_Position = mul(u_modelViewProj, vec4(a_position, 1.0));
 
-    // Pass through texcoord
+    // Pass UV
     v_texcoord0 = a_texcoord0;
 
-    // Pass the normal forward if you'd like to do lighting
-    // For a quick hack, just pass it untransformed. If you want
-    // correct lighting, you'd transform by a normal matrix, etc.
-    v_normal = a_normal;
-}
+    // Normalize T, B, N just in case
+    vec3 T = normalize(a_tangent);
+    vec3 B = normalize(a_bitangent);
+    vec3 N = normalize(a_normal);
 
+    // Build a 3x3 TBN for use in the fragment shader
+    // We'll store it row-wise or column-wise (we just have to be consistent).
+    v_tbn = mat3(T, B, N);
+}
