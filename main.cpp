@@ -281,12 +281,12 @@ int main(int argc, char** argv)
 
     Assimp::Importer importer;
     const aiScene* scene = importer.ReadFile(
-        "/dev/shm/duckGLTF/duckGltfExport.glb",
+        "/dev/shm/drill/glb/Drill_01_1k.glb",
         aiProcess_Triangulate |
         aiProcess_GenNormals |
         aiProcess_CalcTangentSpace |
-        aiProcess_FlipUVs //|              // <-- Flips V texture coordinates
-        //aiProcess_ConvertToLeftHanded     // <-- Converts to left-handed coordinate system
+        //aiProcess_FlipUVs //|              // <-- Flips V texture coordinates
+        aiProcess_ConvertToLeftHanded     // <-- Converts to left-handed coordinate system
     );
 
     if (!scene)
@@ -361,8 +361,8 @@ int main(int argc, char** argv)
         // Set up a simple camera
         float view[16];
         {
-            const bx::Vec3 at   = {0.0f, 50.0f, 0.0f};
-            const bx::Vec3 eye  = {100.0f, 150.0f, 100.0f}; // Move slightly back so we can see the duck
+            const bx::Vec3 at   = {0.0f, 0.1f, 0.0f};
+            const bx::Vec3 eye  = {0.0f, 0.25f, 0.25f}; // Move slightly back so we can see the duck
             const bx::Vec3 up   = {0.0f, 1.0f, 0.0f};
             bx::mtxLookAt(view, eye, at, up);
         }
@@ -375,20 +375,13 @@ int main(int argc, char** argv)
         bgfx::setViewTransform(0, view, proj);
 
         float mtxRotateY[16];
-        bx::mtxRotateY(mtxRotateY, time);
-
-        float mtxRotateX[16];
-        bx::mtxRotateX(mtxRotateX, bx::toRad(-90.0f)); // Rotate -90 degrees around X
-
-        float mtxTransform[16];
-        bx::mtxMul(mtxTransform, mtxRotateX, mtxRotateY); // Apply X rotation first, then Y
+        bx::mtxRotateY(mtxRotateY, time); // Keep Y-axis rotation
 
         float mtxTranslate[16];
-        bx::mtxTranslate(mtxTranslate, 0.0f, 0.0f, 0.0f);
+        bx::mtxTranslate(mtxTranslate, 0.0f, 0.0f, 0.0f); // Adjust as needed
 
         float mtxModel[16];
-        bx::mtxMul(mtxModel, mtxTransform, mtxTranslate);
-
+        bx::mtxMul(mtxModel, mtxRotateY, mtxTranslate); // Only apply Y rotation
 
         // Submit the geometry
         bgfx::setTransform(mtxModel);
