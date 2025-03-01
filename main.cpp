@@ -29,8 +29,7 @@ struct MyFancyVertex
 {
     float px, py, pz;  // Position
     float nx, ny, nz;  // Normal
-    float tx, ty, tz;  // Tangent
-    float bx, by, bz;  // Bitangent
+    float tx, ty, tz, tw;  // Tangent (includes handedness)
     float u, v;        // Texture coordinates
 };
 
@@ -173,12 +172,11 @@ static void initVertexLayout()
     // This layout must match the usage in varying.def.sc (POSITION, NORMAL0, TEXCOORD0).
     // We skip COLOR0, COLOR1 in the actual geometry data for brevity (we can fill them if needed).
     g_vertexLayout.begin()
-            .add(bgfx::Attrib::Position,  3, bgfx::AttribType::Float)
-            .add(bgfx::Attrib::Normal,    3, bgfx::AttribType::Float)
-            .add(bgfx::Attrib::Tangent,   3, bgfx::AttribType::Float) // <--
-            .add(bgfx::Attrib::Bitangent, 3, bgfx::AttribType::Float) // <--
-            .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
-            .end();
+        .add(bgfx::Attrib::Position,  3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Normal,    3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Tangent,   4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+        .end();
 }
 
 // -----------------------------------------------------------------------------
@@ -230,22 +228,17 @@ void assimpMeshToBuffers(const aiMesh* mesh,
             v.nx = 0.0f; v.ny = 1.0f; v.nz = 0.0f;
         }
 
-        // Tangent & Bitangent (for normal mapping)
+        // Tangent
         if (hasTangents)
         {
             v.tx = mesh->mTangents[i].x;
             v.ty = mesh->mTangents[i].y;
             v.tz = mesh->mTangents[i].z;
-
-            v.bx = mesh->mBitangents[i].x;
-            v.by = mesh->mBitangents[i].y;
-            v.bz = mesh->mBitangents[i].z;
         }
         else
         {
             // Generate dummy tangent space (not ideal but prevents crashes)
             v.tx = 1.0f; v.ty = 0.0f; v.tz = 0.0f;
-            v.bx = 0.0f; v.by = 1.0f; v.bz = 0.0f;
         }
 
         // Texture Coordinates (UVs)
@@ -686,24 +679,47 @@ int main(int argc, char** argv)
     bgfx::TextureHandle diffuseTex   = loadTextureType(mat, aiTextureType_DIFFUSE, scene);
     bgfx::TextureHandle normalTex    = loadTextureType(mat, aiTextureType_NORMALS, scene);
     bgfx::TextureHandle armTex = loadTextureType(mat, aiTextureType_UNKNOWN, scene);
+    bgfx::TextureHandle irradianceTex = loadTexture("irradiance.ktx");
+    bgfx::TextureHandle brdfLutTex    = loadTexture("brdf_lut.ktx");
+
+
     if (!bgfx::isValid(armTex))
     {
-        std::cout << "Warning: No valid ARM (AO, Roughness, Metalness) texture found.\n";
+        std::cerr << "Warning: No valid ARM (AO, Roughness, Metalness) texture found.\n";
+        return 1;
     }
-
-
     if (!bgfx::isValid(diffuseTex)) {
         std::cerr << "Warning: No valid embedded texture found. The duck will be untextured." << std::endl;
+        return 1;
     }
     if (!bgfx::isValid(normalTex)) {
         std::cerr << "Warning: No valid embedded normalTex texture found. The duck will be untextured normalTex." << std::endl;
+        return 1;
+    }
+    if (!bgfx::isValid(irradianceTex)) {
+        std::cerr << "Warning: invalid irradianceTex handle." << std::endl;
+        return 1;
+    }
+    if (!bgfx::isValid(brdfLutTex)) {
+        std::cerr << "Warning: invalid brdfLutTex handle." << std::endl;
+        return 1;
     }
 
+
+
+    // Create uniforms
+    bgfx::UniformHandle u_myModelMatrix         = bgfx::createUniform("u_myModelMatrix",         bgfx::UniformType::Mat4);
+    bgfx::UniformHandle u_myModelViewProj = bgfx::createUniform("u_myModelViewProj", bgfx::UniformType::Mat4);
+    bgfx::UniformHandle u_camPos        = bgfx::createUniform("u_camPos",        bgfx::UniformType::Vec4);
 
     // Create a sampler uniform so we can bind the texture in the fragment shader
     bgfx::UniformHandle s_texColor   = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
     bgfx::UniformHandle s_texNormal  = bgfx::createUniform("s_texNormal", bgfx::UniformType::Sampler);
     bgfx::UniformHandle s_texARM     = bgfx::createUniform("s_texARM", bgfx::UniformType::Sampler); // Replaces s_texMetal & s_texRough
+
+    bgfx::UniformHandle s_irradiance = bgfx::createUniform("s_irradiance", bgfx::UniformType::Sampler);
+    bgfx::UniformHandle s_radiance   = bgfx::createUniform("s_radiance",   bgfx::UniformType::Sampler);
+    bgfx::UniformHandle s_brdfLUT    = bgfx::createUniform("s_brdfLUT",    bgfx::UniformType::Sampler);
 
     // Load the duck shaders
     bgfx::ProgramHandle program = loadProgram("vs_duck.bin", "fs_duck.bin");
@@ -737,12 +753,11 @@ int main(int argc, char** argv)
 
         // Set up a simple camera
         float view[16];
-        {
-            const bx::Vec3 at   = {0.0f, 0.1f, 0.0f};
-            const bx::Vec3 eye  = {0.0f, 0.25f, 0.25f}; // Move slightly back so we can see the duck
-            const bx::Vec3 up   = {0.0f, 1.0f, 0.0f};
-            bx::mtxLookAt(view, eye, at, up);
-        }
+        const bx::Vec3 at   = {0.0f, 0.1f, 0.0f};
+        const bx::Vec3 eye  = {0.0f, 0.25f, 0.25f}; // Move slightly back so we can see the duck
+        const bx::Vec3 up   = {0.0f, 1.0f, 0.0f};
+        bx::mtxLookAt(view, eye, at, up);
+
 
         float proj[16];
         {
@@ -781,13 +796,26 @@ int main(int argc, char** argv)
         bgfx::setViewTransform(viewId_Mesh, view, proj);
 
         float mtxRotateY[16];
-        bx::mtxRotateY(mtxRotateY, time); // Keep Y-axis rotation
+        bx::mtxRotateY(mtxRotateY, time);
 
         float mtxTranslate[16];
-        bx::mtxTranslate(mtxTranslate, 0.0f, 0.0f, 0.0f); // Adjust as needed
+        bx::mtxTranslate(mtxTranslate, 0.0f, 0.0f, 0.0f);
 
         float mtxModel[16];
-        bx::mtxMul(mtxModel, mtxRotateY, mtxTranslate); // Only apply Y rotation
+        bx::mtxMul(mtxModel, mtxRotateY, mtxTranslate);
+
+        // Compute Model-View-Projection (MVP) matrix
+        float modelViewProj[16];
+        bx::mtxMul(modelViewProj, mtxModel, view); // Multiply Model * View
+        bx::mtxMul(modelViewProj, modelViewProj, proj); // Multiply result * Projection
+
+        // Set shader uniforms
+        bgfx::setUniform(u_myModelMatrix, mtxModel);
+        bgfx::setUniform(u_myModelViewProj, modelViewProj);
+
+        // Use the `eye` position as `u_camPos`
+        float camPos[4] = { eye.x, eye.y, eye.z, 0.0f };
+        bgfx::setUniform(u_camPos, camPos);
 
         // Submit the geometry
         bgfx::setTransform(mtxModel);
@@ -795,18 +823,36 @@ int main(int argc, char** argv)
         bgfx::setIndexBuffer(ibh);
 
         // In your render loop, after setting up the transform, vertex, index buffers:
-        if (bgfx::isValid(diffuseTex))  bgfx::setTexture(0, s_texColor, diffuseTex);
-        if (bgfx::isValid(normalTex))   bgfx::setTexture(1, s_texNormal, normalTex);
+        if (bgfx::isValid(diffuseTex))
+            bgfx::setTexture(0, s_texColor, diffuseTex);
+        if (bgfx::isValid(normalTex))
+            bgfx::setTexture(1, s_texNormal, normalTex);
         if (bgfx::isValid(armTex))
             bgfx::setTexture(2, s_texARM, armTex);
+        bgfx::setTexture(3, s_irradiance, irradianceTex);
+        bgfx::setTexture(4, s_radiance, s_skyboxTexture);
+        bgfx::setTexture(5, s_brdfLUT,    brdfLutTex);
 
 
+#if 1 //opaque
         bgfx::setState(
-                    BGFX_STATE_WRITE_RGB |
-                    BGFX_STATE_WRITE_Z   |
-                    BGFX_STATE_DEPTH_TEST_LESS |
-                    BGFX_STATE_CULL_CCW
-                    );
+            BGFX_STATE_WRITE_RGB |
+            BGFX_STATE_WRITE_Z |
+            BGFX_STATE_DEPTH_TEST_LESS |
+            BGFX_STATE_CULL_CCW |           // Culls backfaces (CCW is standard)
+            BGFX_STATE_MSAA                // Enables anti-aliasing (optional, if MSAA is supported)
+        );
+#else
+        bgfx::setState(
+            BGFX_STATE_WRITE_RGB |
+            BGFX_STATE_WRITE_Z |
+            BGFX_STATE_DEPTH_TEST_LESS |
+            BGFX_STATE_CULL_CCW |
+            BGFX_STATE_MSAA |
+            BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA) // Standard alpha blending
+        );
+#endif
+
         bgfx::submit(viewId_Mesh, program);
 
         // Advance frame
@@ -819,16 +865,26 @@ int main(int argc, char** argv)
     bgfx::destroy(vbh);
     bgfx::destroy(ibh);
 
+    // Destroy uniforms
+    bgfx::destroy(u_myModelMatrix);
+    bgfx::destroy(u_myModelViewProj);
+    bgfx::destroy(u_camPos);
+
     if (bgfx::isValid(armTex))
         bgfx::destroy(armTex);
     if (bgfx::isValid(normalTex))
         bgfx::destroy(normalTex);
     if (bgfx::isValid(diffuseTex))
         bgfx::destroy(diffuseTex);
+    if (bgfx::isValid(irradianceTex)) bgfx::destroy(irradianceTex);
+    if (bgfx::isValid(brdfLutTex))    bgfx::destroy(brdfLutTex);
 
     bgfx::destroy(s_texColor);
     bgfx::destroy(s_texNormal);
     bgfx::destroy(s_texARM);
+    bgfx::destroy(s_irradiance);
+    bgfx::destroy(s_radiance);
+    bgfx::destroy(s_brdfLUT);
 
     bgfx::destroy(s_skyboxTexture);
     bgfx::destroy(s_skyboxUniform);
