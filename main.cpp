@@ -709,7 +709,7 @@ int main(int argc, char** argv)
 
     // Create uniforms
     bgfx::UniformHandle u_myModelMatrix         = bgfx::createUniform("u_myModelMatrix",         bgfx::UniformType::Mat4);
-    bgfx::UniformHandle u_myModelViewProj = bgfx::createUniform("u_myModelViewProj", bgfx::UniformType::Mat4);
+    //bgfx::UniformHandle u_myModelViewProj = bgfx::createUniform("u_myModelViewProj", bgfx::UniformType::Mat4);
     bgfx::UniformHandle u_camPos        = bgfx::createUniform("u_camPos",        bgfx::UniformType::Vec4);
 
     // Create a sampler uniform so we can bind the texture in the fragment shader
@@ -808,10 +808,11 @@ int main(int argc, char** argv)
         float modelViewProj[16];
         bx::mtxMul(modelViewProj, mtxModel, view); // Multiply Model * View
         bx::mtxMul(modelViewProj, modelViewProj, proj); // Multiply result * Projection
+        bgfx::setTransform(modelViewProj);
 
         // Set shader uniforms
         bgfx::setUniform(u_myModelMatrix, mtxModel);
-        bgfx::setUniform(u_myModelViewProj, modelViewProj);
+        //bgfx::setUniform(u_myModelViewProj, modelViewProj);
 
         // Use the `eye` position as `u_camPos`
         float camPos[4] = { eye.x, eye.y, eye.z, 0.0f };
@@ -822,17 +823,23 @@ int main(int argc, char** argv)
         bgfx::setVertexBuffer(0, vbh);
         bgfx::setIndexBuffer(ibh);
 
-        // In your render loop, after setting up the transform, vertex, index buffers:
-        if (bgfx::isValid(diffuseTex))
-            bgfx::setTexture(0, s_texColor, diffuseTex);
-        if (bgfx::isValid(normalTex))
-            bgfx::setTexture(1, s_texNormal, normalTex);
-        if (bgfx::isValid(armTex))
-            bgfx::setTexture(2, s_texARM, armTex);
-        bgfx::setTexture(3, s_irradiance, irradianceTex);
-        bgfx::setTexture(4, s_radiance, s_skyboxTexture);
-        bgfx::setTexture(5, s_brdfLUT,    brdfLutTex);
+        if (bgfx::isValid(diffuseTex)) bgfx::setTexture(0, s_texColor, diffuseTex);
+        else std::cerr << "Error: diffuseTex (s_texColor) is invalid!" << std::endl;
 
+        if (bgfx::isValid(normalTex)) bgfx::setTexture(1, s_texNormal, normalTex);
+        else std::cerr << "Error: normalTex (s_texNormal) is invalid!" << std::endl;
+
+        if (bgfx::isValid(armTex)) bgfx::setTexture(2, s_texARM, armTex);
+        else std::cerr << "Error: armTex (s_texARM) is invalid!" << std::endl;
+
+        if (bgfx::isValid(irradianceTex)) bgfx::setTexture(3, s_irradiance, irradianceTex);
+        else std::cerr << "Error: irradianceTex (s_irradiance) is invalid!" << std::endl;
+
+        if (bgfx::isValid(s_skyboxTexture)) bgfx::setTexture(4, s_radiance, s_skyboxTexture);
+        else std::cerr << "Error: s_skyboxTexture (s_radiance) is invalid!" << std::endl;
+
+        if (bgfx::isValid(brdfLutTex)) bgfx::setTexture(5, s_brdfLUT, brdfLutTex);
+        else std::cerr << "Error: brdfLutTex (s_brdfLUT) is invalid!" << std::endl;
 
 #if 1 //opaque
         bgfx::setState(
@@ -867,7 +874,7 @@ int main(int argc, char** argv)
 
     // Destroy uniforms
     bgfx::destroy(u_myModelMatrix);
-    bgfx::destroy(u_myModelViewProj);
+    //bgfx::destroy(u_myModelViewProj);
     bgfx::destroy(u_camPos);
 
     if (bgfx::isValid(armTex))
