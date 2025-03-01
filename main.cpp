@@ -22,6 +22,9 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+#include <boost/beast/core/detail/base64.hpp>
+#include <string>
+
 struct MyFancyVertex
 {
     float px, py, pz;  // Position
@@ -173,64 +176,202 @@ void assimpMeshToBuffers(const aiMesh* mesh,
     std::cout << "num indices:" << outIndices.size() << std::endl;
 }
 
+static bgfx::TextureHandle createBgfxTextureFromMemory(const unsigned char* imageData, size_t dataSize)
+{
+    if (!imageData || dataSize == 0)
+    {
+        std::cerr << "[createBgfxTextureFromMemory] Invalid data or size.\n";
+        return BGFX_INVALID_HANDLE;
+    }
+
+    int width, height, channels;
+    // Use STBI_rgb_alpha to force 4 channels
+    unsigned char* decoded = stbi_load_from_memory(
+        imageData,
+        static_cast<int>(dataSize),
+        &width,
+        &height,
+        &channels,
+        STBI_rgb_alpha
+    );
+
+    if (!decoded)
+    {
+        std::cerr << "[createBgfxTextureFromMemory] stbi_load_from_memory failed.\n";
+        return BGFX_INVALID_HANDLE;
+    }
+
+    // STB outputs RGBA; BGFX expects BGRA by default.
+    // Swap R/B in-place:
+    for (int i = 0; i < width * height * 4; i += 4)
+    {
+        std::swap(decoded[i + 0], decoded[i + 2]); // R <-> B
+    }
+
+    const bgfx::Memory* mem = bgfx::copy(decoded, width * height * 4);
+    stbi_image_free(decoded);
+
+    // Create the BGFX texture
+    bgfx::TextureHandle handle = bgfx::createTexture2D(
+        static_cast<uint16_t>(width),
+        static_cast<uint16_t>(height),
+        false,     // no mipmaps
+        1,         // number of layers
+        bgfx::TextureFormat::BGRA8,
+        0,
+        mem
+    );
+
+    if (!bgfx::isValid(handle))
+    {
+        std::cerr << "[createBgfxTextureFromMemory] Failed to create BGFX texture.\n";
+    }
+    return handle;
+}
+
+static bgfx::TextureHandle loadEmbeddedTexture(const aiScene* scene, int texIndex)
+{
+    if (!scene || texIndex < 0 || texIndex >= static_cast<int>(scene->mNumTextures))
+    {
+        std::cerr << "[loadEmbeddedTexture] Invalid texture index.\n";
+        return BGFX_INVALID_HANDLE;
+    }
+
+    const aiTexture* aiTex = scene->mTextures[texIndex];
+    if (!aiTex)
+    {
+        std::cerr << "[loadEmbeddedTexture] aiTexture is null.\n";
+        return BGFX_INVALID_HANDLE;
+    }
+
+    // If mHeight == 0, it's likely a compressed image in memory (PNG/JPG)
+    if (aiTex->mHeight == 0)
+    {
+        // aiTex->pcData is actually raw compressed data
+        // The size is stored in mWidth
+        const unsigned char* rawData = reinterpret_cast<const unsigned char*>(aiTex->pcData);
+        size_t dataSize = static_cast<size_t>(aiTex->mWidth);
+
+        return createBgfxTextureFromMemory(rawData, dataSize);
+    }
+    else
+    {
+        // If mHeight != 0, this means it's an uncompressed (e.g. RGBA) array:
+        // size = mWidth * mHeight * bytesPerPixel
+        // But it's very unusual in GLTF/GLB. You can handle it similarly:
+        size_t dataSize = size_t(aiTex->mWidth * aiTex->mHeight * 4); // 4 is a guess for RGBA
+        const unsigned char* rawData = reinterpret_cast<const unsigned char*>(aiTex->pcData);
+        return createBgfxTextureFromMemory(rawData, dataSize);
+    }
+}
+
+static bgfx::TextureHandle loadExternalTexture(const std::string& filePath)
+{
+    // Example: simple file load into memory, then decode
+    // (You might need a more robust file I/O system.)
+    FILE* fp = fopen(filePath.c_str(), "rb");
+    if (!fp)
+    {
+        std::cerr << "[loadExternalTexture] Failed to open file: " << filePath << "\n";
+        return BGFX_INVALID_HANDLE;
+    }
+
+    fseek(fp, 0, SEEK_END);
+    long fileSize = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    if (fileSize <= 0)
+    {
+        std::cerr << "[loadExternalTexture] Invalid file size: " << filePath << "\n";
+        fclose(fp);
+        return BGFX_INVALID_HANDLE;
+    }
+
+    std::vector<unsigned char> buffer(fileSize);
+    fread(buffer.data(), 1, fileSize, fp);
+    fclose(fp);
+
+    // Now decode
+    return createBgfxTextureFromMemory(buffer.data(), buffer.size());
+}
+
+
+
+static std::vector<unsigned char> base64Decode(const std::string& base64Str) {
+    std::vector<unsigned char> decoded(boost::beast::detail::base64::decoded_size(base64Str.size()));
+    auto result = boost::beast::detail::base64::decode(decoded.data(), base64Str.data(), base64Str.size());
+    decoded.resize(result.first);  // Resize to actual output size
+    return decoded;
+}
+
+
+// A helper if your path is "data:image/png;base64,XXX..."
+static bgfx::TextureHandle loadBase64Texture(const std::string& base64Uri)
+{
+    // Typically the URI is something like "data:image/png;base64,iVBORw0KGgoAAAANSUhE..."
+    // We need to find the comma that separates the header from the data
+    size_t commaPos = base64Uri.find(',');
+    if (commaPos == std::string::npos)
+    {
+        std::cerr << "[loadBase64Texture] Invalid data URI.\n";
+        return BGFX_INVALID_HANDLE;
+    }
+
+    std::string base64Part = base64Uri.substr(commaPos + 1);
+
+    // decode
+    std::vector<unsigned char> rawBytes = base64Decode(base64Part);
+    if (rawBytes.empty())
+    {
+        std::cerr << "[loadBase64Texture] Base64 decode failed.\n";
+        return BGFX_INVALID_HANDLE;
+    }
+
+    return createBgfxTextureFromMemory(rawBytes.data(), rawBytes.size());
+}
+
 
 bgfx::TextureHandle loadTextureType(const aiMaterial* mat, aiTextureType type, const aiScene* scene)
 {
-    aiString path;
-    if (mat->GetTexture(type, 0, &path) == AI_SUCCESS)
+    aiString aiPath;
+    if (mat->GetTexture(type, 0, &aiPath) != AI_SUCCESS)
     {
-        // This is similar to your existing code. We'll do the same logic:
-        if (path.length > 0 && path.data[0] == '*')
-        {
-            // Embedded texture
-            int texIndex = atoi(path.C_Str() + 1);
-            if (texIndex >= 0 && texIndex < (int)scene->mNumTextures)
-            {
-                const aiTexture* aiTex = scene->mTextures[texIndex];
-                if (aiTex && aiTex->mHeight == 0)
-                {
-                    // Compressed texture in memory (e.g. PNG, JPG data)
-                    int x, y, n;
-                    unsigned char* data = stbi_load_from_memory(
-                                reinterpret_cast<const stbi_uc*>(aiTex->pcData),
-                                aiTex->mWidth,
-                                &x, &y, &n, 4
-                                );
-                    if (data)
-                    {
-                        // Only swap Red and Blue if this is a Diffuse/BaseColor texture.
-                        //if (type == aiTextureType_DIFFUSE || type == aiTextureType_BASE_COLOR)
-                        {
-                            for (int i = 0; i < x * y * 4; i += 4)
-                            {
-                                std::swap(data[i], data[i + 2]); // Swap Red and Blue channels
-                            }
-                        }
-
-                        const bgfx::Memory* mem = bgfx::copy(data, x * y * 4);
-                        stbi_image_free(data);
-
-                        return bgfx::createTexture2D(
-                                    uint16_t(x),
-                                    uint16_t(y),
-                                    false, 1,
-                                    bgfx::TextureFormat::BGRA8, 0,
-                                    mem
-                                    );
-                    }
-                }
-            }
-        }
-        else
-        {
-            // External file reference (not embedded).
-            // You'd have to load from disk. For glTF, often the textures might be separate files.
-            // ...
-        }
+        // No texture found for this type on this material
+        return BGFX_INVALID_HANDLE;
     }
 
+    std::string path = aiPath.C_Str();
+    if (path.empty())
+    {
+        // Path is empty, no texture
+        return BGFX_INVALID_HANDLE;
+    }
+
+    // Check if it's referencing embedded texture data like "*0", "*1", etc.
+    // (Assimp uses '*' prefix for embedded index references.)
+    if (path[0] == '*')
+    {
+        int texIndex = std::stoi(path.substr(1));
+        return loadEmbeddedTexture(scene, texIndex);
+    }
+    // Check if it's a data URI (rare in .gltf)
+    else if (path.rfind("data:", 0) == 0)
+    {
+        // We have data embedded in the path as base64
+        return loadBase64Texture(path);
+    }
+    else
+    {
+        // Otherwise, assume it's an external file reference
+        // path is relative to the .gltf/.glb; you may need to prepend the model directory
+        return loadExternalTexture(path);
+    }
+
+    // Shouldn't get here, but if we do:
+    std::cerr << "[loadTextureType] Unknown texture path format.\n";
     return BGFX_INVALID_HANDLE;
 }
+
 
 // Converts Assimp texture types to human-readable strings
 const char* aiTextureTypeToString(aiTextureType type)
@@ -356,7 +497,8 @@ int main(int argc, char** argv)
 
     Assimp::Importer importer;
     const aiScene* scene = importer.ReadFile(
-                "/dev/shm/drill/glb/Drill_01_1k.glb",
+                //"Drill_01_1k.glb"
+                "Drill_01_1k.gltf",
                 aiProcess_Triangulate |
                 aiProcess_GenNormals |
                 aiProcess_CalcTangentSpace |
