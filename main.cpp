@@ -37,6 +37,137 @@ struct MyFancyVertex
 
 static bgfx::VertexLayout g_vertexLayout;
 
+// Simple cube geometry for the skybox (8 vertices, 36 indices for a textured box).
+static float s_skyboxVertices[] =
+{
+    // x,    y,    z
+    -10.0f,  10.0f, -10.0f,
+    10.0f,   10.0f, -10.0f,
+    10.0f,   10.0f,  10.0f,
+    -10.0f,  10.0f,  10.0f,
+    -10.0f, -10.0f, -10.0f,
+    10.0f,  -10.0f, -10.0f,
+    10.0f,  -10.0f,  10.0f,
+    -10.0f, -10.0f,  10.0f,
+};
+
+static const uint16_t s_skyboxIndices[] =
+{
+    // top
+    0, 1, 2,
+    2, 3, 0,
+    // bottom
+    4, 6, 5,
+    6, 4, 7,
+    // front
+    0, 4, 1,
+    1, 4, 5,
+    // back
+    2, 6, 3,
+    3, 6, 7,
+    // left
+    0, 3, 4,
+    4, 3, 7,
+    // right
+    1, 5, 2,
+    2, 5, 6
+};
+
+static bgfx::VertexBufferHandle s_skyboxVertBuffer = BGFX_INVALID_HANDLE;
+static bgfx::IndexBufferHandle s_skyboxIndexBuffer = BGFX_INVALID_HANDLE;
+static bgfx::ProgramHandle s_skyboxProgram = BGFX_INVALID_HANDLE;
+static bgfx::UniformHandle s_skyboxUniform    = BGFX_INVALID_HANDLE;
+static bgfx::UniformHandle s_uView     = BGFX_INVALID_HANDLE;
+static bgfx::UniformHandle s_uProj     = BGFX_INVALID_HANDLE;
+static bgfx::TextureHandle s_skyboxTexture    = BGFX_INVALID_HANDLE;
+
+// A simple structure for your skybox vertex
+struct SkyboxVertex
+{
+    float x, y, z;
+};
+
+// Load file into bgfx memory buffer
+static const bgfx::Memory* loadMem(const char* filename)
+{
+    FILE* fp = fopen(filename, "rb");
+    if (!fp)
+    {
+        std::cerr << "Could not open file: " << filename << std::endl;
+        return nullptr;
+    }
+
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    const bgfx::Memory* mem = bgfx::alloc(size + 1);
+    fread(mem->data, 1, size, fp);
+    fclose(fp);
+
+    mem->data[size] = '\0';
+    return mem;
+}
+
+// Load a compiled shader (e.g. vs_skybox.bin, fs_skybox.bin)
+static bgfx::ShaderHandle loadShader(const char* fpath)
+{
+    const bgfx::Memory* mem = loadMem(fpath);
+    if (!mem)
+    {
+        return BGFX_INVALID_HANDLE;
+    }
+    return bgfx::createShader(mem);
+}
+
+static bgfx::TextureHandle loadTexture(const char* filePath)
+{
+    bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
+
+    // Open the texture file.
+    FILE* fp = fopen(filePath, "rb");
+    if (!fp)
+    {
+        std::cerr << "Could not open texture: " << filePath << std::endl;
+        return handle;
+    }
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    if (size <= 0)
+    {
+        std::cerr << "Texture file is empty: " << filePath << std::endl;
+        fclose(fp);
+        return handle;
+    }
+
+    // Read the file data.
+    uint8_t* data = new uint8_t[size];
+    if (fread(data, 1, size, fp) != (size_t)size)
+    {
+        std::cerr << "Failed to read texture file: " << filePath << std::endl;
+        fclose(fp);
+        delete[] data;
+        return handle;
+    }
+    fclose(fp);
+
+    // Create a bgfx memory reference and upload it as a texture.
+    const bgfx::Memory* mem = bgfx::copy(data, size);
+    delete[] data; // Safe to delete now, because bgfx owns the memory.
+
+    handle = bgfx::createTexture(mem);
+    bgfx::setName(handle, filePath);
+
+    if (!bgfx::isValid(handle))
+    {
+        std::cerr << "Failed to create texture from file: " << filePath << std::endl;
+    }
+
+    return handle;
+}
+
 static void initVertexLayout()
 {
     // This layout must match the usage in varying.def.sc (POSITION, NORMAL0, TEXCOORD0).
@@ -48,35 +179,6 @@ static void initVertexLayout()
             .add(bgfx::Attrib::Bitangent, 3, bgfx::AttribType::Float) // <--
             .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
             .end();
-}
-
-// -----------------------------------------------------------------------------
-// Load a .bin shader file compiled by the bgfx shader compiler
-// -----------------------------------------------------------------------------
-bgfx::ShaderHandle loadShader(const char* _name)
-{
-    // Read the file:
-    FILE* fp = fopen(_name, "rb");
-    if (!fp)
-    {
-        std::cerr << "Could not open shader file: " << _name << std::endl;
-        return BGFX_INVALID_HANDLE;
-    }
-    fseek(fp, 0, SEEK_END);
-    long size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-
-    const bgfx::Memory* mem = bgfx::alloc(uint32_t(size + 1));
-    fread(mem->data, 1, size, fp);
-    fclose(fp);
-
-    // Null-terminate for safety (though not strictly required by bgfx)
-    mem->data[size] = '\0';
-
-    // Create the shader
-    bgfx::ShaderHandle handle = bgfx::createShader(mem);
-    bgfx::setName(handle, _name);
-    return handle;
 }
 
 // -----------------------------------------------------------------------------
@@ -187,13 +289,13 @@ static bgfx::TextureHandle createBgfxTextureFromMemory(const unsigned char* imag
     int width, height, channels;
     // Use STBI_rgb_alpha to force 4 channels
     unsigned char* decoded = stbi_load_from_memory(
-        imageData,
-        static_cast<int>(dataSize),
-        &width,
-        &height,
-        &channels,
-        STBI_rgb_alpha
-    );
+                imageData,
+                static_cast<int>(dataSize),
+                &width,
+                &height,
+                &channels,
+                STBI_rgb_alpha
+                );
 
     if (!decoded)
     {
@@ -213,14 +315,14 @@ static bgfx::TextureHandle createBgfxTextureFromMemory(const unsigned char* imag
 
     // Create the BGFX texture
     bgfx::TextureHandle handle = bgfx::createTexture2D(
-        static_cast<uint16_t>(width),
-        static_cast<uint16_t>(height),
-        false,     // no mipmaps
-        1,         // number of layers
-        bgfx::TextureFormat::BGRA8,
-        0,
-        mem
-    );
+                static_cast<uint16_t>(width),
+                static_cast<uint16_t>(height),
+                false,     // no mipmaps
+                1,         // number of layers
+                bgfx::TextureFormat::BGRA8,
+                0,
+                mem
+                );
 
     if (!bgfx::isValid(handle))
     {
@@ -482,13 +584,49 @@ int main(int argc, char** argv)
     init.resolution.reset  = BGFX_RESET_VSYNC;
     bgfx::init(init);
 
+
+    // Create vertex layout
+    bgfx::VertexLayout skyboxVertLayout;
+    skyboxVertLayout.begin()
+            .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+            .end();
+
+    // Create vertex buffer
+    s_skyboxVertBuffer = bgfx::createVertexBuffer(
+                bgfx::makeRef(s_skyboxVertices, sizeof(s_skyboxVertices)),
+                skyboxVertLayout
+                );
+
+    // Create index buffer
+    s_skyboxIndexBuffer = bgfx::createIndexBuffer(
+                bgfx::makeRef(s_skyboxIndices, sizeof(s_skyboxIndices))
+                );
+
+    // Load shaders
+    bgfx::ShaderHandle vsh = loadShader("vs_skybox.bin");
+    bgfx::ShaderHandle fsh = loadShader("fs_skybox.bin");
+    s_skyboxProgram = bgfx::createProgram(vsh, fsh, true);
+
+    // Create uniforms
+    s_skyboxUniform = bgfx::createUniform("s_skyMap", bgfx::UniformType::Sampler);
+    s_uView  = bgfx::createUniform("u_viewMat",   bgfx::UniformType::Mat4);
+    s_uProj  = bgfx::createUniform("u_projMat",   bgfx::UniformType::Mat4);
+
+    // Load cubemap KTX
+    // Example: /dev/shm/mossyForestExr/skybox.ktx
+    s_skyboxTexture = loadTexture("skybox.ktx");
+
+    const int viewId_Skybox = 0;
+    const int viewId_Mesh = 1;
+
     // Set the view clear color (cornflower blue, for instance)
-    bgfx::setViewClear(0,
+    bgfx::setViewClear(viewId_Skybox,
                        BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
                        0x6495EDff, // ABGR
                        1.0f,       // depth
                        0           // stencil
                        );
+    bgfx::setViewClear(viewId_Mesh, BGFX_CLEAR_DEPTH);
 
     // -------------------------------------------------------------------------
     // Prepare geometry and load the duck
@@ -585,7 +723,8 @@ int main(int argc, char** argv)
 
     bgfx::reset((uint32_t)fbWidth, (uint32_t)fbHeight, BGFX_RESET_VSYNC);
 
-    bgfx::setViewRect(0, 0, 0, (uint16_t)fbWidth, (uint16_t)fbHeight);
+    bgfx::setViewRect(viewId_Skybox, 0, 0, (uint16_t)fbWidth, (uint16_t)fbHeight);
+    bgfx::setViewRect(viewId_Mesh, 0, 0, (uint16_t)fbWidth, (uint16_t)fbHeight);
 
     float time = 0.0f;
     while (!glfwWindowShouldClose(window))
@@ -610,7 +749,36 @@ int main(int argc, char** argv)
             bx::mtxProj(proj, 60.0f, float(fbWidth)/float(fbHeight), 0.1f, 500.0f, bgfx::getCaps()->homogeneousDepth);
         }
 
-        bgfx::setViewTransform(0, view, proj);
+
+        //Skybox
+        float viewNoTrans[16];
+        bx::memCopy(viewNoTrans, view, sizeof(viewNoTrans));
+        viewNoTrans[12] = 0.0f;
+        viewNoTrans[13] = 0.0f;
+        viewNoTrans[14] = 0.0f;
+        float viewProjNoTrans[16];
+        bx::mtxMul(viewProjNoTrans, viewNoTrans, proj);
+        bgfx::setViewTransform(viewId_Skybox, viewNoTrans, viewProjNoTrans);
+        // Set uniforms for the skybox vertex shader
+        bgfx::setUniform(s_uView, view);
+        bgfx::setUniform(s_uProj, proj);
+
+        // Submit the skybox draw
+        bgfx::setVertexBuffer(0, s_skyboxVertBuffer);
+        bgfx::setIndexBuffer(s_skyboxIndexBuffer);
+
+        // Bind the cubemap
+        bgfx::setTexture(0, s_skyboxUniform, s_skyboxTexture);
+
+        bgfx::setState(BGFX_STATE_WRITE_RGB);
+
+        bgfx::submit(viewId_Skybox, s_skyboxProgram);
+
+
+
+
+        //Drill mesh
+        bgfx::setViewTransform(viewId_Mesh, view, proj);
 
         float mtxRotateY[16];
         bx::mtxRotateY(mtxRotateY, time); // Keep Y-axis rotation
@@ -639,7 +807,7 @@ int main(int argc, char** argv)
                     BGFX_STATE_DEPTH_TEST_LESS |
                     BGFX_STATE_CULL_CCW
                     );
-        bgfx::submit(0, program);
+        bgfx::submit(viewId_Mesh, program);
 
         // Advance frame
         bgfx::frame();
@@ -661,6 +829,15 @@ int main(int argc, char** argv)
     bgfx::destroy(s_texColor);
     bgfx::destroy(s_texNormal);
     bgfx::destroy(s_texARM);
+
+    bgfx::destroy(s_skyboxTexture);
+    bgfx::destroy(s_skyboxUniform);
+    bgfx::destroy(s_uView);
+    bgfx::destroy(s_uProj);
+
+    bgfx::destroy(s_skyboxIndexBuffer);
+    bgfx::destroy(s_skyboxVertBuffer);
+    bgfx::destroy(s_skyboxProgram);
 
     bgfx::shutdown();
     glfwDestroyWindow(window);
