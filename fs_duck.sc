@@ -67,16 +67,22 @@ void main()
     // Simple Lambert for direct diffuse
     vec3 directDiffuse = albedo * NdotL;
 
-    // Simple Blinn-Phong for direct spec (not physically correct but simpler)
     vec3 H = normalize(L + V);
     float NdotH = max(dot(N, H), 0.0);
-    float specPower = mix(8.0, 128.0, 1.0 - roughness);
-    float directSpecularFactor = pow(NdotH, specPower);
 
+    // Cook-Torrance specular BRDF
+    float alpha = roughness * roughness;
+    float alpha2 = alpha * alpha;
+    float D = alpha2 / (3.14159 * pow((NdotH * NdotH * (alpha2 - 1.0) + 1.0), 2.0));
+
+    float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    float G = NdotL / (NdotL * (1.0 - k) + k) * NdotV / (NdotV * (1.0 - k) + k);
+ 
     // Compute Schlick’s Fresnel factor per light direction
     float fresnelL = pow(1.0 - max(dot(H, V), 0.0), 5.0);
     vec3 F_L = F0 + (1.0 - F0) * fresnelL;
-    vec3 directSpecular = directSpecularFactor * F_L;
+ 
+    vec3 directSpecular = (D * G * F_L) / (4.0 * NdotL * NdotV + 0.0001);
 
     // Combine direct lighting
     // You can multiply by a light color and intensity if you like
