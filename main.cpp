@@ -544,7 +544,7 @@ int main(int argc, char** argv)
 
     // We only need an OpenGL context so bgfx can hook into it
     glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "Duck Example", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1280, 720, "IBL PBR Drill", nullptr, nullptr);
     if (!window)
     {
         std::cerr << "Failed to create GLFW window." << std::endl;
@@ -621,9 +621,6 @@ int main(int argc, char** argv)
                        );
     bgfx::setViewClear(viewId_Mesh, BGFX_CLEAR_DEPTH);
 
-    // -------------------------------------------------------------------------
-    // Prepare geometry and load the duck
-    // -------------------------------------------------------------------------
     initVertexLayout();
 
     Assimp::Importer importer;
@@ -689,11 +686,11 @@ int main(int argc, char** argv)
         return 1;
     }
     if (!bgfx::isValid(diffuseTex)) {
-        std::cerr << "Warning: No valid embedded texture found. The duck will be untextured." << std::endl;
+        std::cerr << "Warning: No valid embedded texture found. The drill will be untextured." << std::endl;
         return 1;
     }
     if (!bgfx::isValid(normalTex)) {
-        std::cerr << "Warning: No valid embedded normalTex texture found. The duck will be untextured normalTex." << std::endl;
+        std::cerr << "Warning: No valid embedded normalTex texture found. The drill will be untextured normalTex." << std::endl;
         return 1;
     }
     if (!bgfx::isValid(irradianceTex)) {
@@ -721,8 +718,8 @@ int main(int argc, char** argv)
     bgfx::UniformHandle s_radiance   = bgfx::createUniform("s_radiance",   bgfx::UniformType::Sampler);
     bgfx::UniformHandle s_brdfLUT    = bgfx::createUniform("s_brdfLUT",    bgfx::UniformType::Sampler);
 
-    // Load the duck shaders
-    bgfx::ProgramHandle program = loadProgram("vs_duck.bin", "fs_duck.bin");
+    // Load the drill shaders
+    bgfx::ProgramHandle program = loadProgram("vs_drill.bin", "fs_drill.bin");
     if (!bgfx::isValid(program))
     {
         std::cerr << "Could not create program. Exiting." << std::endl;
@@ -754,7 +751,7 @@ int main(int argc, char** argv)
         // Set up a simple camera
         float view[16];
         const bx::Vec3 at   = {0.0f, 0.1f, 0.0f};
-        const bx::Vec3 eye  = {0.0f, 0.25f, 0.25f}; // Move slightly back so we can see the duck
+        const bx::Vec3 eye  = {0.0f, 0.25f, 0.25f}; // Move slightly back so we can see the drill
         const bx::Vec3 up   = {0.0f, 1.0f, 0.0f};
         bx::mtxLookAt(view, eye, at, up);
 
