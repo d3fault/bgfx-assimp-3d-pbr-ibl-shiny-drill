@@ -72,7 +72,11 @@ void main()
     float NdotH = max(dot(N, H), 0.0);
     float specPower = mix(8.0, 128.0, 1.0 - roughness);
     float directSpecularFactor = pow(NdotH, specPower);
-    vec3 directSpecular = directSpecularFactor * F0;
+
+    // Compute Schlick’s Fresnel factor per light direction
+    float fresnelL = pow(1.0 - max(dot(H, V), 0.0), 5.0);
+    vec3 F_L = F0 + (1.0 - F0) * fresnelL;
+    vec3 directSpecular = directSpecularFactor * F_L;
 
     // Combine direct lighting
     // You can multiply by a light color and intensity if you like
