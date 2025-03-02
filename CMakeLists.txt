@@ -108,7 +108,7 @@ add_definitions(-DBX_CONFIG_DEBUG)
 
 add_executable(drill main.cpp)
 
-file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/textures DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+#file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/textures DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 file(INSTALL DESTINATION ${CMAKE_BINARY_DIR}
     TYPE FILE
     FILES
@@ -117,6 +117,9 @@ file(INSTALL DESTINATION ${CMAKE_BINARY_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/Drill_01.bin
         ${CMAKE_CURRENT_SOURCE_DIR}/irradiance.ktx
         ${CMAKE_CURRENT_SOURCE_DIR}/skybox.ktx
+        ${CMAKE_CURRENT_SOURCE_DIR}/Drill_01_arm_1k.jpg
+        ${CMAKE_CURRENT_SOURCE_DIR}/Drill_01_nor_gl_1k.jpg
+        ${CMAKE_CURRENT_SOURCE_DIR}/Drill_01_diff_1k.jpg
 )
 
 if(DEFINED ENV{EMSDK})
@@ -132,9 +135,10 @@ if(DEFINED ENV{EMSDK})
         --preload-file fs_drill.bin \
         --preload-file vs_drill.bin \
         --preload-file irradiance.ktx \
-        --preload-file textures/Drill_01_arm_1k.jpg \
-        --preload-file textures/Drill_01_nor_gl_1k.jpg \
-        --preload-file textures/Drill_01_diff_1k.jpg \
+        --preload-file Drill_01_arm_1k.jpg \
+        --preload-file Drill_01_nor_gl_1k.jpg \
+        --preload-file Drill_01_diff_1k.jpg \
+        --preload-file Drill_01.bin \
         --bind \
         --use-preload-plugins \
         -Wall \
@@ -147,12 +151,18 @@ if(DEFINED ENV{EMSDK})
         -Os \
         -s USE_GLFW=3 \
         -s USE_BOOST_HEADERS=1 \
+        -s USE_ZLIB=1 \
         --no-heap-copy \
         -s GL_ENABLE_GET_PROC_ADDRESS \
         -static \
         -s ALLOW_MEMORY_GROWTH=1 \
         -s STACK_SIZE=8MB \
         -s NO_EXIT_RUNTIME=1")
+
+    include_directories(
+        /home/user/assimp/include
+        /home/user/assimp/build/include
+    )
 
     target_link_libraries(drill PRIVATE
         ${BGFX_DIR}/.build/wasm/bin/bgfxDebug.bc

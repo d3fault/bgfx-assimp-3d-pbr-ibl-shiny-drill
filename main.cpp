@@ -13,10 +13,20 @@
 #include <bgfx/platform.h>
 #include <bx/math.h>
 
-// GLFW
+#if __EMSCRIPTEN__
+
+#include <emscripten.h>
+#include <emscripten/html5.h>
+#include "GLFW/glfw3.h"
+#define MY_EMSCRIPTEN_CANVAS_CSS_SELECTOR "#canvas"
+
+#else // Linux/X11
+
 #include "GLFW/glfw3.h"
 #define GLFW_EXPOSE_NATIVE_X11
 #include "GLFW/glfw3native.h"
+
+#endif // __EMSCRIPTEN__
 
 // stb_image for decoding the embedded texture
 #define STB_IMAGE_IMPLEMENTATION
@@ -530,6 +540,167 @@ void printMaterialTextures(const aiScene* scene)
     }
 }
 
+static float theTime;
+static int fbWidth;
+static int fbHeight;
+static const int viewId_Skybox = 0;
+static const int viewId_Mesh = 1;
+
+static bgfx::UniformHandle u_myModelMatrix;
+static bgfx::UniformHandle u_camPos;
+
+static bgfx::UniformHandle s_texColor;
+static bgfx::UniformHandle s_texNormal;
+static bgfx::UniformHandle s_texARM;
+
+static bgfx::UniformHandle s_irradiance;
+static bgfx::UniformHandle s_radiance;
+static bgfx::UniformHandle s_brdfLUT;
+
+static bgfx::VertexLayout skyboxVertLayout;
+
+static bgfx::ShaderHandle vsh;
+static bgfx::ShaderHandle fsh;
+
+static std::vector<MyFancyVertex> vertices;
+static std::vector<uint32_t> indices;
+
+static bgfx::VertexBufferHandle vbh;
+
+static bgfx::IndexBufferHandle ibh;
+
+static bgfx::TextureHandle diffuseTex;
+static bgfx::TextureHandle normalTex;
+static bgfx::TextureHandle armTex;
+static bgfx::TextureHandle irradianceTex;
+static bgfx::TextureHandle brdfLutTex;
+
+static bgfx::ProgramHandle program;
+
+void renderFrame()
+{
+    glfwPollEvents();
+
+    // Update time and do a rotation
+    double currentTime = glfwGetTime();
+    theTime = float(currentTime);
+
+    // Set up a simple camera
+    float view[16];
+    const bx::Vec3 at   = {0.0f, 0.1f, 0.0f};
+    const bx::Vec3 eye  = {0.0f, 0.25f, 0.25f}; // Move slightly back so we can see the drill
+    const bx::Vec3 up   = {0.0f, 1.0f, 0.0f};
+    bx::mtxLookAt(view, eye, at, up);
+
+
+    float proj[16];
+    {
+        bx::mtxProj(proj, 60.0f, float(fbWidth)/float(fbHeight), 0.1f, 500.0f, bgfx::getCaps()->homogeneousDepth);
+    }
+
+
+    //Skybox
+    float viewNoTrans[16];
+    bx::memCopy(viewNoTrans, view, sizeof(viewNoTrans));
+    viewNoTrans[12] = 0.0f;
+    viewNoTrans[13] = 0.0f;
+    viewNoTrans[14] = 0.0f;
+    float viewProjNoTrans[16];
+    bx::mtxMul(viewProjNoTrans, viewNoTrans, proj);
+    bgfx::setViewTransform(viewId_Skybox, viewNoTrans, viewProjNoTrans);
+    // Set uniforms for the skybox vertex shader
+    bgfx::setUniform(s_uView, view);
+    bgfx::setUniform(s_uProj, proj);
+
+    // Submit the skybox draw
+    bgfx::setVertexBuffer(0, s_skyboxVertBuffer);
+    bgfx::setIndexBuffer(s_skyboxIndexBuffer);
+
+    // Bind the cubemap
+    bgfx::setTexture(0, s_skyboxUniform, s_skyboxTexture);
+
+    bgfx::setState(BGFX_STATE_WRITE_RGB);
+
+    bgfx::submit(viewId_Skybox, s_skyboxProgram);
+
+
+
+
+    //Drill mesh
+    bgfx::setViewTransform(viewId_Mesh, view, proj);
+
+    float mtxRotateY[16];
+    bx::mtxRotateY(mtxRotateY, theTime);
+
+    float mtxTranslate[16];
+    bx::mtxTranslate(mtxTranslate, 0.0f, 0.0f, 0.0f);
+
+    float mtxModel[16];
+    bx::mtxMul(mtxModel, mtxRotateY, mtxTranslate);
+
+    // Compute Model-View-Projection (MVP) matrix
+    float modelViewProj[16];
+    bx::mtxMul(modelViewProj, mtxModel, view); // Multiply Model * View
+    bx::mtxMul(modelViewProj, modelViewProj, proj); // Multiply result * Projection
+    bgfx::setTransform(modelViewProj);
+
+    // Set shader uniforms
+    bgfx::setUniform(u_myModelMatrix, mtxModel);
+    //bgfx::setUniform(u_myModelViewProj, modelViewProj);
+
+    // Use the `eye` position as `u_camPos`
+    float camPos[4] = { eye.x, eye.y, eye.z, 0.0f };
+    bgfx::setUniform(u_camPos, camPos);
+
+    // Submit the geometry
+    bgfx::setTransform(mtxModel);
+    bgfx::setVertexBuffer(0, vbh);
+    bgfx::setIndexBuffer(ibh);
+
+    if (bgfx::isValid(diffuseTex)) bgfx::setTexture(0, s_texColor, diffuseTex);
+    else std::cerr << "Error: diffuseTex (s_texColor) is invalid!" << std::endl;
+
+    if (bgfx::isValid(normalTex)) bgfx::setTexture(1, s_texNormal, normalTex);
+    else std::cerr << "Error: normalTex (s_texNormal) is invalid!" << std::endl;
+
+    if (bgfx::isValid(armTex)) bgfx::setTexture(2, s_texARM, armTex);
+    else std::cerr << "Error: armTex (s_texARM) is invalid!" << std::endl;
+
+    if (bgfx::isValid(irradianceTex)) bgfx::setTexture(3, s_irradiance, irradianceTex);
+    else std::cerr << "Error: irradianceTex (s_irradiance) is invalid!" << std::endl;
+
+    if (bgfx::isValid(s_skyboxTexture)) bgfx::setTexture(4, s_radiance, s_skyboxTexture);
+    else std::cerr << "Error: s_skyboxTexture (s_radiance) is invalid!" << std::endl;
+
+    if (bgfx::isValid(brdfLutTex)) bgfx::setTexture(5, s_brdfLUT, brdfLutTex);
+    else std::cerr << "Error: brdfLutTex (s_brdfLUT) is invalid!" << std::endl;
+
+#if 1 //opaque
+    bgfx::setState(
+        BGFX_STATE_WRITE_RGB |
+        BGFX_STATE_WRITE_Z |
+        BGFX_STATE_DEPTH_TEST_LESS |
+        BGFX_STATE_CULL_CCW |           // Culls backfaces (CCW is standard)
+        BGFX_STATE_MSAA                // Enables anti-aliasing (optional, if MSAA is supported)
+    );
+#else
+    bgfx::setState(
+        BGFX_STATE_WRITE_RGB |
+        BGFX_STATE_WRITE_Z |
+        BGFX_STATE_DEPTH_TEST_LESS |
+        BGFX_STATE_CULL_CCW |
+        BGFX_STATE_MSAA |
+        BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA) // Standard alpha blending
+    );
+#endif
+
+    bgfx::submit(viewId_Mesh, program);
+
+    // Advance frame
+    bgfx::frame();
+    //glfwSwapBuffers(window);
+}
+
 // -----------------------------------------------------------------------------
 int main(int argc, char** argv)
 {
@@ -559,15 +730,11 @@ int main(int argc, char** argv)
     bgfx::PlatformData pd;
     memset(&pd, 0, sizeof(pd));
 
-    // On desktop, for bgfx + GLFW with OpenGL, we need the native window handle/context
-#if defined(_WIN32)
-    pd.nwh = glfwGetWin32Window(window);
-#elif defined(__APPLE__)
-    pd.nwh = glfwGetCocoaWindow(window);
-#else
-    // For X11, e.g.:
-    pd.nwh = (void*)(uintptr_t)glfwGetX11Window(window);
-#endif
+#ifdef __EMSCRIPTEN__
+    pd.nwh = (void*)MY_EMSCRIPTEN_CANVAS_CSS_SELECTOR;
+#else // Linux/X11
+    pd.nwh = (void*)uintptr_t(glfwGetX11Window(window));
+#endif // __EMSCRIPTEN__
 
     bgfx::Init init;
     init.type = bgfx::RendererType::OpenGL; // Force OpenGL
@@ -579,7 +746,6 @@ int main(int argc, char** argv)
 
 
     // Create vertex layout
-    bgfx::VertexLayout skyboxVertLayout;
     skyboxVertLayout.begin()
             .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
             .end();
@@ -596,8 +762,8 @@ int main(int argc, char** argv)
                 );
 
     // Load shaders
-    bgfx::ShaderHandle vsh = loadShader("vs_skybox.bin");
-    bgfx::ShaderHandle fsh = loadShader("fs_skybox.bin");
+    vsh = loadShader("vs_skybox.bin");
+    fsh = loadShader("fs_skybox.bin");
     s_skyboxProgram = bgfx::createProgram(vsh, fsh, true);
 
     // Create uniforms
@@ -608,9 +774,6 @@ int main(int argc, char** argv)
     // Load cubemap KTX
     // Example: /dev/shm/mossyForestExr/skybox.ktx
     s_skyboxTexture = loadTexture("skybox.ktx");
-
-    const int viewId_Skybox = 0;
-    const int viewId_Mesh = 1;
 
     // Set the view clear color (cornflower blue, for instance)
     bgfx::setViewClear(viewId_Skybox,
@@ -654,17 +817,15 @@ int main(int argc, char** argv)
     const aiMesh* mesh = scene->mMeshes[0];
 
     // Convert to our arrays
-    std::vector<MyFancyVertex> vertices;
-    std::vector<uint32_t> indices;
     assimpMeshToBuffers(mesh, vertices, indices);
 
     // Create static vertex/index buffers
-    bgfx::VertexBufferHandle vbh = bgfx::createVertexBuffer(
+    vbh = bgfx::createVertexBuffer(
                 bgfx::makeRef(vertices.data(), sizeof(MyFancyVertex) * vertices.size()),
                 g_vertexLayout
                 );
 
-    bgfx::IndexBufferHandle ibh = bgfx::createIndexBuffer(
+    ibh = bgfx::createIndexBuffer(
                 bgfx::makeRef(indices.data(), sizeof(uint32_t) * indices.size()),
                 BGFX_BUFFER_INDEX32 // IMPORTANT: 32-bit indices
                 );
@@ -673,11 +834,16 @@ int main(int argc, char** argv)
     // Suppose we have one material
     const aiMaterial* mat = scene->mMaterials[0];
 
-    bgfx::TextureHandle diffuseTex   = loadTextureType(mat, aiTextureType_DIFFUSE, scene);
-    bgfx::TextureHandle normalTex    = loadTextureType(mat, aiTextureType_NORMALS, scene);
-    bgfx::TextureHandle armTex = loadTextureType(mat, aiTextureType_UNKNOWN, scene);
-    bgfx::TextureHandle irradianceTex = loadTexture("irradiance.ktx");
-    bgfx::TextureHandle brdfLutTex    = loadTexture("brdf_lut.ktx");
+    diffuseTex   = loadTextureType(mat, aiTextureType_DIFFUSE, scene);
+    normalTex    = loadTextureType(mat, aiTextureType_NORMALS, scene);
+#ifdef __EMSCRIPTEN__
+    armTex = loadTextureType(mat, aiTextureType_METALNESS, scene);
+#else // Linux/X11
+    //my old Debian Bullseye version of assimp uses "UNKNOWN" for the arm, but the bleeding edge git version (which i had to get for wasm) uses either METALNESS or ROUGHNESS
+    armTex = loadTextureType(mat, aiTextureType_UNKNOWN, scene);
+#endif // __EMSCRIPTEN__
+    irradianceTex = loadTexture("irradiance.ktx");
+    brdfLutTex    = loadTexture("brdf_lut.ktx");
 
 
     if (!bgfx::isValid(armTex))
@@ -705,21 +871,21 @@ int main(int argc, char** argv)
 
 
     // Create uniforms
-    bgfx::UniformHandle u_myModelMatrix         = bgfx::createUniform("u_myModelMatrix",         bgfx::UniformType::Mat4);
+    u_myModelMatrix         = bgfx::createUniform("u_myModelMatrix",         bgfx::UniformType::Mat4);
     //bgfx::UniformHandle u_myModelViewProj = bgfx::createUniform("u_myModelViewProj", bgfx::UniformType::Mat4);
-    bgfx::UniformHandle u_camPos        = bgfx::createUniform("u_camPos",        bgfx::UniformType::Vec4);
+    u_camPos        = bgfx::createUniform("u_camPos",        bgfx::UniformType::Vec4);
 
     // Create a sampler uniform so we can bind the texture in the fragment shader
-    bgfx::UniformHandle s_texColor   = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
-    bgfx::UniformHandle s_texNormal  = bgfx::createUniform("s_texNormal", bgfx::UniformType::Sampler);
-    bgfx::UniformHandle s_texARM     = bgfx::createUniform("s_texARM", bgfx::UniformType::Sampler); // Replaces s_texMetal & s_texRough
+    s_texColor   = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
+    s_texNormal  = bgfx::createUniform("s_texNormal", bgfx::UniformType::Sampler);
+    s_texARM     = bgfx::createUniform("s_texARM", bgfx::UniformType::Sampler); // Replaces s_texMetal & s_texRough
 
-    bgfx::UniformHandle s_irradiance = bgfx::createUniform("s_irradiance", bgfx::UniformType::Sampler);
-    bgfx::UniformHandle s_radiance   = bgfx::createUniform("s_radiance",   bgfx::UniformType::Sampler);
-    bgfx::UniformHandle s_brdfLUT    = bgfx::createUniform("s_brdfLUT",    bgfx::UniformType::Sampler);
+    s_irradiance = bgfx::createUniform("s_irradiance", bgfx::UniformType::Sampler);
+    s_radiance   = bgfx::createUniform("s_radiance",   bgfx::UniformType::Sampler);
+    s_brdfLUT    = bgfx::createUniform("s_brdfLUT",    bgfx::UniformType::Sampler);
 
     // Load the drill shaders
-    bgfx::ProgramHandle program = loadProgram("vs_drill.bin", "fs_drill.bin");
+    program = loadProgram("vs_drill.bin", "fs_drill.bin");
     if (!bgfx::isValid(program))
     {
         std::cerr << "Could not create program. Exiting." << std::endl;
@@ -729,7 +895,6 @@ int main(int argc, char** argv)
     // -------------------------------------------------------------------------
     // Main loop
     // -------------------------------------------------------------------------
-    int fbWidth, fbHeight;
     glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
     if (fbWidth < 1) fbWidth = 1;
     if (fbHeight < 1) fbHeight = 1;
@@ -739,129 +904,14 @@ int main(int argc, char** argv)
     bgfx::setViewRect(viewId_Skybox, 0, 0, (uint16_t)fbWidth, (uint16_t)fbHeight);
     bgfx::setViewRect(viewId_Mesh, 0, 0, (uint16_t)fbWidth, (uint16_t)fbHeight);
 
-    float time = 0.0f;
+    theTime = 0.0f;
+
+#if __EMSCRIPTEN__
+    emscripten_set_main_loop(renderFrame, 0, true);
+#else // Linux/X11
     while (!glfwWindowShouldClose(window))
     {
-        glfwPollEvents();
-
-        // Update time and do a rotation
-        double currentTime = glfwGetTime();
-        time = float(currentTime);
-
-        // Set up a simple camera
-        float view[16];
-        const bx::Vec3 at   = {0.0f, 0.1f, 0.0f};
-        const bx::Vec3 eye  = {0.0f, 0.25f, 0.25f}; // Move slightly back so we can see the drill
-        const bx::Vec3 up   = {0.0f, 1.0f, 0.0f};
-        bx::mtxLookAt(view, eye, at, up);
-
-
-        float proj[16];
-        {
-            bx::mtxProj(proj, 60.0f, float(fbWidth)/float(fbHeight), 0.1f, 500.0f, bgfx::getCaps()->homogeneousDepth);
-        }
-
-
-        //Skybox
-        float viewNoTrans[16];
-        bx::memCopy(viewNoTrans, view, sizeof(viewNoTrans));
-        viewNoTrans[12] = 0.0f;
-        viewNoTrans[13] = 0.0f;
-        viewNoTrans[14] = 0.0f;
-        float viewProjNoTrans[16];
-        bx::mtxMul(viewProjNoTrans, viewNoTrans, proj);
-        bgfx::setViewTransform(viewId_Skybox, viewNoTrans, viewProjNoTrans);
-        // Set uniforms for the skybox vertex shader
-        bgfx::setUniform(s_uView, view);
-        bgfx::setUniform(s_uProj, proj);
-
-        // Submit the skybox draw
-        bgfx::setVertexBuffer(0, s_skyboxVertBuffer);
-        bgfx::setIndexBuffer(s_skyboxIndexBuffer);
-
-        // Bind the cubemap
-        bgfx::setTexture(0, s_skyboxUniform, s_skyboxTexture);
-
-        bgfx::setState(BGFX_STATE_WRITE_RGB);
-
-        bgfx::submit(viewId_Skybox, s_skyboxProgram);
-
-
-
-
-        //Drill mesh
-        bgfx::setViewTransform(viewId_Mesh, view, proj);
-
-        float mtxRotateY[16];
-        bx::mtxRotateY(mtxRotateY, time);
-
-        float mtxTranslate[16];
-        bx::mtxTranslate(mtxTranslate, 0.0f, 0.0f, 0.0f);
-
-        float mtxModel[16];
-        bx::mtxMul(mtxModel, mtxRotateY, mtxTranslate);
-
-        // Compute Model-View-Projection (MVP) matrix
-        float modelViewProj[16];
-        bx::mtxMul(modelViewProj, mtxModel, view); // Multiply Model * View
-        bx::mtxMul(modelViewProj, modelViewProj, proj); // Multiply result * Projection
-        bgfx::setTransform(modelViewProj);
-
-        // Set shader uniforms
-        bgfx::setUniform(u_myModelMatrix, mtxModel);
-        //bgfx::setUniform(u_myModelViewProj, modelViewProj);
-
-        // Use the `eye` position as `u_camPos`
-        float camPos[4] = { eye.x, eye.y, eye.z, 0.0f };
-        bgfx::setUniform(u_camPos, camPos);
-
-        // Submit the geometry
-        bgfx::setTransform(mtxModel);
-        bgfx::setVertexBuffer(0, vbh);
-        bgfx::setIndexBuffer(ibh);
-
-        if (bgfx::isValid(diffuseTex)) bgfx::setTexture(0, s_texColor, diffuseTex);
-        else std::cerr << "Error: diffuseTex (s_texColor) is invalid!" << std::endl;
-
-        if (bgfx::isValid(normalTex)) bgfx::setTexture(1, s_texNormal, normalTex);
-        else std::cerr << "Error: normalTex (s_texNormal) is invalid!" << std::endl;
-
-        if (bgfx::isValid(armTex)) bgfx::setTexture(2, s_texARM, armTex);
-        else std::cerr << "Error: armTex (s_texARM) is invalid!" << std::endl;
-
-        if (bgfx::isValid(irradianceTex)) bgfx::setTexture(3, s_irradiance, irradianceTex);
-        else std::cerr << "Error: irradianceTex (s_irradiance) is invalid!" << std::endl;
-
-        if (bgfx::isValid(s_skyboxTexture)) bgfx::setTexture(4, s_radiance, s_skyboxTexture);
-        else std::cerr << "Error: s_skyboxTexture (s_radiance) is invalid!" << std::endl;
-
-        if (bgfx::isValid(brdfLutTex)) bgfx::setTexture(5, s_brdfLUT, brdfLutTex);
-        else std::cerr << "Error: brdfLutTex (s_brdfLUT) is invalid!" << std::endl;
-
-#if 1 //opaque
-        bgfx::setState(
-            BGFX_STATE_WRITE_RGB |
-            BGFX_STATE_WRITE_Z |
-            BGFX_STATE_DEPTH_TEST_LESS |
-            BGFX_STATE_CULL_CCW |           // Culls backfaces (CCW is standard)
-            BGFX_STATE_MSAA                // Enables anti-aliasing (optional, if MSAA is supported)
-        );
-#else
-        bgfx::setState(
-            BGFX_STATE_WRITE_RGB |
-            BGFX_STATE_WRITE_Z |
-            BGFX_STATE_DEPTH_TEST_LESS |
-            BGFX_STATE_CULL_CCW |
-            BGFX_STATE_MSAA |
-            BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA) // Standard alpha blending
-        );
-#endif
-
-        bgfx::submit(viewId_Mesh, program);
-
-        // Advance frame
-        bgfx::frame();
-        //glfwSwapBuffers(window);
+        renderFrame();
     }
 
     // Cleanup
@@ -904,4 +954,5 @@ int main(int argc, char** argv)
     glfwTerminate();
 
     return 0;
+#endif // __EMSCRIPTEN__
 }

@@ -69,17 +69,17 @@
     {
       "mimeType": "image/jpeg",
       "name": "Drill_01_nor_gl",
-      "uri": "textures/Drill_01_nor_gl_1k.jpg"
+      "uri": "Drill_01_nor_gl_1k.jpg"
     },
     {
       "mimeType": "image/jpeg",
       "name": "Drill_01_diff",
-      "uri": "textures/Drill_01_diff_1k.jpg"
+      "uri": "Drill_01_diff_1k.jpg"
     },
     {
       "mimeType": "image/jpeg",
       "name": "Drill_01_metallic-Drill_01_roughness",
-      "uri": "textures/Drill_01_arm_1k.jpg"
+      "uri": "Drill_01_arm_1k.jpg"
     }
   ],
   "accessors": [
