@@ -1,0 +1,15 @@
+irradiance.ktx:
+	cmgen --size=256 --ibl-irradiance=irradianceDir limpopo_golf_course_4k.exr
+	//irradianceDir has a bunch of .png files
+	toktx --cubemap --genmipmap irradiance.ktx irradianceDir/limpopo_golf_course_4k/i_px.png irradianceDir/limpopo_golf_course_4k/i_nx.png irradianceDir/limpopo_golf_course_4k/i_py.png irradianceDir/limpopo_golf_course_4k/i_ny.png irradianceDir/limpopo_golf_course_4k/i_pz.png irradianceDir/limpopo_golf_course_4k/i_nz.png
+	//irradiance.ktx needs to be converted to RGBA32F with texturec (see below)
+
+radiance.ktx and skybox.ktx:
+	cmgen --type=ktx --format=ktx --size=512 --deploy=outputDir limpopo_golf_course_4k.exr
+	//outputDir has 2 .ktx files, one is skybox the other is radiance. both need to be converted to RGBA32F with texturec (see below)
+
+converting .ktx (any) to RGBA32F with BGFX's texturec tool:
+	//the radiance ktx needs --mips, the other 2 do not
+	texturec -f radiance.ktx -o radiance_bgfx.ktx -t RGBA32F --mips
+	texturec -f skybox.ktx -o skybox_bgfx.ktx -t RGBA32F
+	texturec -f irradiance.ktx -o irradiance_bgfx.ktx -t RGBA32F

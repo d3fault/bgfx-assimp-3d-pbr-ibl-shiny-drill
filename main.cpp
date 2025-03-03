@@ -573,6 +573,7 @@ static bgfx::TextureHandle diffuseTex;
 static bgfx::TextureHandle normalTex;
 static bgfx::TextureHandle armTex;
 static bgfx::TextureHandle irradianceTex;
+static bgfx::TextureHandle radianceTex;
 static bgfx::TextureHandle brdfLutTex;
 
 static bgfx::ProgramHandle program;
@@ -669,8 +670,8 @@ void renderFrame()
     if (bgfx::isValid(irradianceTex)) bgfx::setTexture(3, s_irradiance, irradianceTex);
     else std::cerr << "Error: irradianceTex (s_irradiance) is invalid!" << std::endl;
 
-    if (bgfx::isValid(s_skyboxTexture)) bgfx::setTexture(4, s_radiance, s_skyboxTexture);
-    else std::cerr << "Error: s_skyboxTexture (s_radiance) is invalid!" << std::endl;
+    if (bgfx::isValid(radianceTex)) bgfx::setTexture(4, s_radiance, radianceTex);
+    else std::cerr << "Error: radianceTex (s_radiance) is invalid!" << std::endl;
 
     if (bgfx::isValid(brdfLutTex)) bgfx::setTexture(5, s_brdfLUT, brdfLutTex);
     else std::cerr << "Error: brdfLutTex (s_brdfLUT) is invalid!" << std::endl;
@@ -843,6 +844,7 @@ int main(int argc, char** argv)
     armTex = loadTextureType(mat, aiTextureType_UNKNOWN, scene);
 #endif // __EMSCRIPTEN__
     irradianceTex = loadTexture("irradiance.ktx");
+    radianceTex = loadTexture("radiance.ktx");
     brdfLutTex    = loadTexture("brdf_lut.ktx");
 
 
@@ -861,6 +863,10 @@ int main(int argc, char** argv)
     }
     if (!bgfx::isValid(irradianceTex)) {
         std::cerr << "Warning: invalid irradianceTex handle." << std::endl;
+        return 1;
+    }
+    if (!bgfx::isValid(radianceTex)) {
+        std::cerr << "Warning: invalid radianceTex handle." << std::endl;
         return 1;
     }
     if (!bgfx::isValid(brdfLutTex)) {
@@ -931,6 +937,7 @@ int main(int argc, char** argv)
     if (bgfx::isValid(diffuseTex))
         bgfx::destroy(diffuseTex);
     if (bgfx::isValid(irradianceTex)) bgfx::destroy(irradianceTex);
+    if (bgfx::isValid(radianceTex)) bgfx::destroy(radianceTex);
     if (bgfx::isValid(brdfLutTex))    bgfx::destroy(brdfLutTex);
 
     bgfx::destroy(s_texColor);

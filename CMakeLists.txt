@@ -117,6 +117,7 @@ file(INSTALL DESTINATION ${CMAKE_BINARY_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/Drill_01.bin
         ${CMAKE_CURRENT_SOURCE_DIR}/irradiance.ktx
         ${CMAKE_CURRENT_SOURCE_DIR}/skybox.ktx
+        ${CMAKE_CURRENT_SOURCE_DIR}/radiance.ktx
         ${CMAKE_CURRENT_SOURCE_DIR}/Drill_01_arm_1k.jpg
         ${CMAKE_CURRENT_SOURCE_DIR}/Drill_01_nor_gl_1k.jpg
         ${CMAKE_CURRENT_SOURCE_DIR}/Drill_01_diff_1k.jpg
@@ -135,6 +136,7 @@ if(DEFINED ENV{EMSDK})
         --preload-file fs_drill.bin \
         --preload-file vs_drill.bin \
         --preload-file irradiance.ktx \
+        --preload-file radiance.ktx \
         --preload-file Drill_01_arm_1k.jpg \
         --preload-file Drill_01_nor_gl_1k.jpg \
         --preload-file Drill_01_diff_1k.jpg \
